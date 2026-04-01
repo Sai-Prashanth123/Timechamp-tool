@@ -12,31 +12,35 @@ import { Request, Response } from 'express';
 export class GlobalExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(GlobalExceptionFilter.name);
 
-  catch(exception: unknown, host: ArgumentsHost) {
+  catch(exception: unknown, host: ArgumentsHost): void {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest<Request>();
 
-    const status =
-      exception instanceof HttpException
-        ? exception.getStatus()
-        : HttpStatus.INTERNAL_SERVER_ERROR;
+    let status = HttpStatus.INTERNAL_SERVER_ERROR;
+    let message: string | string[] = 'Internal server error';
 
-    const message =
-      exception instanceof HttpException
-        ? exception.getResponse()
-        : 'Internal server error';
-
-    if (status === HttpStatus.INTERNAL_SERVER_ERROR) {
-      this.logger.error(exception);
+    if (exception instanceof HttpException) {
+      status = exception.getStatus();
+      const res = exception.getResponse();
+      message =
+        typeof res === 'string'
+          ? res
+          : (res as any).message ?? 'Internal server error';
     }
+
+    // Log internally — never expose stack traces to clients
+    this.logger.error(
+      `${request.method} ${request.url} → ${status}`,
+      exception instanceof Error ? exception.stack : String(exception),
+    );
 
     response.status(status).json({
       success: false,
       statusCode: status,
+      message,
       timestamp: new Date().toISOString(),
       path: request.url,
-      message,
     });
   }
 }
