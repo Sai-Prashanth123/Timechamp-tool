@@ -4,23 +4,13 @@ import {
   Column,
   CreateDateColumn,
   UpdateDateColumn,
-  ManyToOne,
-  JoinColumn,
 } from 'typeorm';
-import { Organization } from './organization.entity';
 
 export enum SubscriptionStatus {
   ACTIVE = 'active',
   PAST_DUE = 'past_due',
   CANCELED = 'canceled',
   TRIALING = 'trialing',
-  INCOMPLETE = 'incomplete',
-}
-
-export enum SubscriptionPlan {
-  STARTER = 'starter',
-  PRO = 'pro',
-  ENTERPRISE = 'enterprise',
 }
 
 @Entity('subscriptions')
@@ -28,20 +18,8 @@ export class Subscription {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column()
+  @Column({ name: 'organization_id' })
   organizationId: string;
-
-  @ManyToOne(() => Organization, (org) => org.subscriptions, {
-    onDelete: 'CASCADE',
-  })
-  @JoinColumn({ name: 'organizationId' })
-  organization: Organization;
-
-  @Column({ type: 'enum', enum: SubscriptionPlan, default: SubscriptionPlan.STARTER })
-  plan: SubscriptionPlan;
-
-  @Column({ type: 'enum', enum: SubscriptionStatus, default: SubscriptionStatus.TRIALING })
-  status: SubscriptionStatus;
 
   @Column({ nullable: true })
   stripeCustomerId: string;
@@ -50,7 +28,26 @@ export class Subscription {
   stripeSubscriptionId: string;
 
   @Column({ nullable: true })
+  stripePriceId: string;
+
+  @Column({
+    type: 'enum',
+    enum: SubscriptionStatus,
+    default: SubscriptionStatus.TRIALING,
+  })
+  status: SubscriptionStatus;
+
+  @Column({ default: 5 })
+  seats: number;
+
+  @Column({ nullable: true })
+  currentPeriodStart: Date;
+
+  @Column({ nullable: true })
   currentPeriodEnd: Date;
+
+  @Column({ nullable: true })
+  canceledAt: Date;
 
   @CreateDateColumn()
   createdAt: Date;

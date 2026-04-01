@@ -6,13 +6,10 @@ import {
   UpdateDateColumn,
   ManyToOne,
   JoinColumn,
-  OneToMany,
 } from 'typeorm';
 import { Organization } from './organization.entity';
-import { RefreshToken } from './refresh-token.entity';
 
 export enum UserRole {
-  OWNER = 'owner',
   ADMIN = 'admin',
   MANAGER = 'manager',
   EMPLOYEE = 'employee',
@@ -23,33 +20,39 @@ export class User {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column()
-  firstName: string;
+  @Column({ name: 'organization_id' })
+  organizationId: string;
 
-  @Column()
-  lastName: string;
+  @ManyToOne(() => Organization)
+  @JoinColumn({ name: 'organization_id' })
+  organization: Organization;
 
-  @Column({ unique: true })
+  @Column({ length: 255 })
   email: string;
 
   @Column({ select: false })
   passwordHash: string;
 
+  @Column({ length: 255 })
+  firstName: string;
+
+  @Column({ length: 255 })
+  lastName: string;
+
   @Column({ type: 'enum', enum: UserRole, default: UserRole.EMPLOYEE })
   role: UserRole;
+
+  @Column({ nullable: true })
+  avatarUrl: string;
+
+  @Column({ default: false })
+  emailVerified: boolean;
 
   @Column({ default: true })
   isActive: boolean;
 
   @Column({ nullable: true })
-  organizationId: string;
-
-  @ManyToOne(() => Organization, (org) => org.users, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'organizationId' })
-  organization: Organization;
-
-  @OneToMany(() => RefreshToken, (token) => token.user)
-  refreshTokens: RefreshToken[];
+  invitedBy: string;
 
   @CreateDateColumn()
   createdAt: Date;

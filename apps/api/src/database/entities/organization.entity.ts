@@ -4,33 +4,42 @@ import {
   Column,
   CreateDateColumn,
   UpdateDateColumn,
-  OneToMany,
 } from 'typeorm';
-import { User } from './user.entity';
-import { Subscription } from './subscription.entity';
+
+export enum OrgPlan {
+  STARTER = 'starter',
+  PRO = 'pro',
+  ENTERPRISE = 'enterprise',
+}
 
 @Entity('organizations')
 export class Organization {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ unique: true })
+  @Column({ length: 255 })
   name: string;
 
-  @Column({ unique: true })
+  @Column({ length: 255, unique: true })
   slug: string;
+
+  @Column({ type: 'enum', enum: OrgPlan, default: OrgPlan.STARTER })
+  plan: OrgPlan;
+
+  @Column({ default: 5 })
+  seats: number;
 
   @Column({ nullable: true })
   logoUrl: string;
 
+  @Column({ nullable: true })
+  website: string;
+
+  @Column({ nullable: true, default: 'UTC' })
+  timezone: string;
+
   @Column({ default: true })
   isActive: boolean;
-
-  @OneToMany(() => User, (user) => user.organization)
-  users: User[];
-
-  @OneToMany(() => Subscription, (sub) => sub.organization)
-  subscriptions: Subscription[];
 
   @CreateDateColumn()
   createdAt: Date;

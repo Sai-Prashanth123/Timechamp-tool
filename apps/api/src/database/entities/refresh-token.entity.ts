@@ -5,7 +5,6 @@ import {
   CreateDateColumn,
   ManyToOne,
   JoinColumn,
-  Index,
 } from 'typeorm';
 import { User } from './user.entity';
 
@@ -14,22 +13,27 @@ export class RefreshToken {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Index()
-  @Column()
-  token: string;
-
   @Column()
   userId: string;
 
-  @ManyToOne(() => User, (user) => user.refreshTokens, { onDelete: 'CASCADE' })
+  @Column()
+  organizationId: string;
+
+  @ManyToOne(() => User, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'userId' })
   user: User;
+
+  @Column({ unique: true })
+  token: string;
 
   @Column()
   expiresAt: Date;
 
   @Column({ default: false })
   revoked: boolean;
+
+  @Column({ nullable: true })
+  revokedAt: Date;
 
   @CreateDateColumn()
   createdAt: Date;
