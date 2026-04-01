@@ -47,6 +47,16 @@ export class AuthService {
       });
       if (existingSlug) throw new ConflictException('Please try again');
 
+      // Check for existing user with same email (globally — emails are unique per user identity)
+      const existingEmail = await manager.findOne(User, {
+        where: { email: dto.email.toLowerCase() },
+      });
+      if (existingEmail) {
+        throw new ConflictException(
+          'An account with this email already exists. Please log in instead.',
+        );
+      }
+
       const org = manager.create(Organization, {
         name: dto.organizationName,
         slug,
@@ -81,10 +91,13 @@ export class AuthService {
       .andWhere('user.isActive = true')
       .getOne();
 
-    if (!user) throw new UnauthorizedException('Invalid credentials');
+    // Always run bcrypt.compare to prevent timing-based email enumeration
+    const DUMMY_HASH =
+      '$2b$12$invalidhashfortimingnormalizationonly00000000000000000000';
+    const hashToCompare = user?.passwordHash ?? DUMMY_HASH;
+    const valid = await bcrypt.compare(dto.password, hashToCompare);
 
-    const valid = await bcrypt.compare(dto.password, user.passwordHash);
-    if (!valid) throw new UnauthorizedException('Invalid credentials');
+    if (!user || !valid) throw new UnauthorizedException('Invalid credentials');
 
     return this.generateTokens(user);
   }
