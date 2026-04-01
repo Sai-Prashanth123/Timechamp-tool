@@ -12,7 +12,8 @@ async function bootstrap() {
   });
 
   app.setGlobalPrefix('api/v1');
-  app.enableCors({ origin: process.env.APP_URL, credentials: true });
+  const allowedOrigin = process.env.APP_URL ?? 'http://localhost:3000';
+  app.enableCors({ origin: allowedOrigin, credentials: true });
 
   app.useGlobalPipes(
     new ValidationPipe({ whitelist: true, transform: true, forbidNonWhitelisted: true }),
@@ -37,6 +38,15 @@ async function bootstrap() {
     await app.close();
     process.exit(0);
   });
+
+  process.on('SIGINT', async () => {
+    console.log('SIGINT received, shutting down gracefully...');
+    await app.close();
+    process.exit(0);
+  });
 }
 
-bootstrap();
+bootstrap().catch((err) => {
+  console.error('Fatal error during startup:', err);
+  process.exit(1);
+});

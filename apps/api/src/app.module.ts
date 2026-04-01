@@ -1,3 +1,4 @@
+import * as Joi from 'joi';
 import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -15,7 +16,18 @@ import { RefreshToken } from './database/entities/refresh-token.entity';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      validationSchema: Joi.object({
+        DATABASE_URL: Joi.string().required(),
+        REDIS_URL: Joi.string().required(),
+        JWT_SECRET: Joi.string().min(32).required(),
+        JWT_EXPIRES_IN: Joi.string().default('15m'),
+        JWT_REFRESH_SECRET: Joi.string().min(32).required(),
+        STRIPE_SECRET_KEY: Joi.string().required(),
+        APP_URL: Joi.string().uri().required(),
+      }),
+    }),
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
@@ -23,11 +35,11 @@ import { RefreshToken } from './database/entities/refresh-token.entity';
         url: config.get('DATABASE_URL'),
         entities: [Organization, User, Subscription, RefreshToken],
         migrations: ['dist/database/migrations/*.js'],
-        migrationsRun: true,
+        migrationsRun: config.get('NODE_ENV') !== 'production',
         logging: config.get('NODE_ENV') !== 'production',
         ssl:
           config.get('NODE_ENV') === 'production'
-            ? { rejectUnauthorized: false }
+            ? { rejectUnauthorized: true }
             : false,
       }),
     }),
