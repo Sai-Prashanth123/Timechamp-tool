@@ -13,6 +13,8 @@ const PUBLIC_PATHS = [
   '/api/v1/billing/webhook',
 ];
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 @Injectable()
 export class TenantMiddleware implements NestMiddleware {
   constructor(@InjectDataSource() private dataSource: DataSource) {}
@@ -26,10 +28,18 @@ export class TenantMiddleware implements NestMiddleware {
 
     const orgId = (req as any).user?.organizationId as string | undefined;
     if (orgId) {
-      // Set PostgreSQL session variable — RLS policies read this per connection
-      await this.dataSource.query(
-        `SET LOCAL app.current_org = '${orgId}'`,
-      );
+      if (!UUID_REGEX.test(orgId)) {
+        next(new Error('Invalid organization id format'));
+        return;
+      }
+      try {
+        await this.dataSource.query(
+          `SET LOCAL app.current_org = '${orgId}'`,
+        );
+      } catch (err) {
+        next(err);
+        return;
+      }
     }
 
     next();
