@@ -9,6 +9,7 @@ import { UsersModule } from './modules/users/users.module';
 import { BillingModule } from './modules/billing/billing.module';
 import { TimeTrackingModule } from './modules/time-tracking/time-tracking.module';
 import { AgentModule } from './modules/agent/agent.module';
+import { MonitoringModule } from './modules/monitoring/monitoring.module';
 import { RedisModule } from './infrastructure/redis/redis.module';
 import { TenantMiddleware } from './common/middleware/tenant.middleware';
 import { Organization } from './database/entities/organization.entity';
@@ -33,6 +34,8 @@ import { Screenshot } from './database/entities/screenshot.entity';
         JWT_REFRESH_SECRET: Joi.string().min(32).required(),
         STRIPE_SECRET_KEY: Joi.string().required(),
         APP_URL: Joi.string().uri().required(),
+        S3_BUCKET: Joi.string().optional(),
+        AWS_REGION: Joi.string().default('us-east-1'),
       }),
     }),
     TypeOrmModule.forRootAsync({
@@ -68,6 +71,7 @@ import { Screenshot } from './database/entities/screenshot.entity';
     BillingModule,
     TimeTrackingModule,
     AgentModule,
+    MonitoringModule,
   ],
 })
 export class AppModule implements NestModule {
