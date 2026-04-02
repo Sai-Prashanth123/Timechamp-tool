@@ -38,6 +38,8 @@ import { Milestone } from './database/entities/milestone.entity';
 import { GpsLocation } from './database/entities/gps-location.entity';
 import { Geofence } from './database/entities/geofence.entity';
 import { ProjectsModule } from './modules/projects/projects.module';
+import { StreamSession } from './database/entities/stream-session.entity';
+import { StreamingModule } from './modules/streaming/streaming.module';
 
 @Module({
   imports: [
@@ -49,11 +51,20 @@ import { ProjectsModule } from './modules/projects/projects.module';
         JWT_SECRET: Joi.string().min(32).required(),
         JWT_EXPIRES_IN: Joi.string().default('15m'),
         JWT_REFRESH_SECRET: Joi.string().min(32).required(),
-        STRIPE_SECRET_KEY: Joi.string().required(),
+        STRIPE_SECRET_KEY: Joi.string().optional(),
         APP_URL: Joi.string().uri().required(),
         S3_BUCKET: Joi.string().optional(),
         AWS_REGION: Joi.string().default('us-east-1'),
         S3_ENDPOINT: Joi.string().uri().optional(),
+        B2_BUCKET: Joi.string().optional(),
+        B2_ENDPOINT: Joi.string().when('B2_BUCKET', { is: Joi.exist(), then: Joi.required(), otherwise: Joi.optional() }),
+        B2_KEY_ID: Joi.string().when('B2_BUCKET', { is: Joi.exist(), then: Joi.required(), otherwise: Joi.optional() }),
+        B2_APP_KEY: Joi.string().when('B2_BUCKET', { is: Joi.exist(), then: Joi.required(), otherwise: Joi.optional() }),
+        B2_CDN_URL: Joi.string().optional(),
+        STREAMING_ENABLED: Joi.boolean().default(false),
+        WS_CORS_ORIGIN: Joi.string().optional(),
+        DAILY_BW_CAP_MB: Joi.number().default(500),
+        SESSION_MAX_HOURS: Joi.number().default(8),
       }),
     }),
     TypeOrmModule.forRootAsync({
@@ -81,6 +92,7 @@ import { ProjectsModule } from './modules/projects/projects.module';
           SlackIntegration,
           AlertRule,
           AlertEvent,
+          StreamSession,
         ],
         migrations: ['dist/database/migrations/*.js'],
         migrationsRun: config.get('NODE_ENV') !== 'production',
@@ -107,6 +119,7 @@ import { ProjectsModule } from './modules/projects/projects.module';
     IntegrationsModule,
     AlertsModule,
     MaintenanceModule,
+    StreamingModule,
   ],
 })
 export class AppModule implements NestModule {

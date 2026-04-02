@@ -4,6 +4,8 @@ const nextConfig = {
     remotePatterns: [
       { protocol: 'https', hostname: '**.amazonaws.com' },
       { protocol: 'https', hostname: '**.cloudfront.net' },
+      { protocol: 'https', hostname: '*.backblazeb2.com' },
+      { protocol: 'https', hostname: 'cdn.timechamp.io' },
     ],
   },
 };

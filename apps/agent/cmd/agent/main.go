@@ -14,6 +14,7 @@ import (
 	"github.com/timechamp/agent/internal/capture"
 	"github.com/timechamp/agent/internal/config"
 	"github.com/timechamp/agent/internal/keychain"
+	"github.com/timechamp/agent/internal/stream"
 	agentsync "github.com/timechamp/agent/internal/sync"
 )
 
@@ -73,6 +74,43 @@ func main() {
 	uploader := agentsync.NewUploader(client, db)
 
 	screenshotsDir := filepath.Join(cfg.DataDir, "screenshots")
+
+	// Start streaming if enabled (config may be overridden by org-level settings)
+	orgCfg, _ := client.FetchOrgConfig()
+	streamingEnabled := cfg.StreamingEnabled
+	cameraEnabled := cfg.CameraEnabled
+	audioEnabled := cfg.AudioEnabled
+	maxStreamFPS := cfg.MaxStreamFPS
+	if orgCfg != nil {
+		// Org-level settings take precedence when present
+		if orgCfg.StreamingEnabled {
+			streamingEnabled = true
+		}
+		if orgCfg.CameraEnabled {
+			cameraEnabled = true
+		}
+		if orgCfg.AudioEnabled {
+			audioEnabled = true
+		}
+		if orgCfg.MaxStreamFPS > 0 {
+			maxStreamFPS = orgCfg.MaxStreamFPS
+		}
+	}
+	if streamingEnabled && cfg.StreamingURL != "" {
+		streamCfg := stream.Config{
+			Enabled:       true,
+			CameraEnabled: cameraEnabled,
+			AudioEnabled:  audioEnabled,
+			MaxFPS:        maxStreamFPS,
+			WSURL:         cfg.StreamingURL,
+			AgentToken:    token,
+		}
+		sm := stream.NewManager(streamCfg)
+		sm.Start()
+		defer sm.Stop()
+		log.Printf("Streaming started: %s (camera=%v audio=%v fps=%d)",
+			cfg.StreamingURL, cameraEnabled, audioEnabled, maxStreamFPS)
+	}
 
 	log.Printf("Agent started. Screenshot every %ds, sync every %ds",
 		cfg.ScreenshotInterval, cfg.SyncInterval)

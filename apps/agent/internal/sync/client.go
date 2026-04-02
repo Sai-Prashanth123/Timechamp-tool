@@ -138,6 +138,38 @@ func (c *Client) GetPresignedUploadURL(filename string) (uploadURL, s3Key string
 	return result.Data.UploadURL, result.Data.S3Key, nil
 }
 
+// OrgStreamConfig holds streaming configuration from the server.
+type OrgStreamConfig struct {
+	ScreenshotIntervalSec int  `json:"screenshotIntervalSec"`
+	StreamingEnabled      bool `json:"streamingEnabled"`
+	CameraEnabled         bool `json:"cameraEnabled"`
+	AudioEnabled          bool `json:"audioEnabled"`
+	MaxStreamFPS          int  `json:"maxStreamFps"`
+}
+
+// FetchOrgConfig fetches organization config including streaming settings.
+func (c *Client) FetchOrgConfig() (*OrgStreamConfig, error) {
+	req, err := http.NewRequest(http.MethodGet, c.baseURL+"/agent/sync/config", nil)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Data OrgStreamConfig `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	return &result.Data, nil
+}
+
 func (c *Client) recordFailure() {
 	c.failures++
 	if c.failures >= circuitOpenThreshold {

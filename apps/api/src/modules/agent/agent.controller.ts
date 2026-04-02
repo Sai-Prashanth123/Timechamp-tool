@@ -73,6 +73,12 @@ export class AgentController {
   @ApiOperation({ summary: 'Get agent configuration for the authenticated org' })
   async getConfig(@AgentCurrentUser() user: User) {
     const org = await this.service.getOrgConfig(user.organizationId);
-    return { screenshotIntervalSec: org.screenshotIntervalSec };
+    return {
+      screenshotIntervalSec: org.screenshotIntervalSec,
+      streamingEnabled: org.streamingEnabled,
+      cameraEnabled: org.cameraEnabled,
+      audioEnabled: org.audioEnabled,
+      maxStreamFps: org.maxStreamFps,
+    };
   }
 }

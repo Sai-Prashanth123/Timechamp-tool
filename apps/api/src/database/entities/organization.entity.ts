@@ -44,6 +44,21 @@ export class Organization {
   @Column({ default: true })
   isActive: boolean;
 
+  @Column({ default: false })
+  streamingEnabled: boolean;
+
+  @Column({ default: false })
+  cameraEnabled: boolean;
+
+  @Column({ default: false })
+  audioEnabled: boolean;
+
+  @Column({ default: 1 })
+  maxStreamFps: number;
+
+  @Column({ default: 500 })
+  dailyBandwidthCapMb: number;
+
   @CreateDateColumn()
   createdAt: Date;
 

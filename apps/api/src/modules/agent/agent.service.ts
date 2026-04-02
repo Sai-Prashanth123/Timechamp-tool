@@ -17,6 +17,7 @@ import { SyncGpsDto } from './dto/sync-gps.dto';
 export class AgentService {
   private s3: S3Client | null = null;
   private bucket: string | null = null;
+  private cdnUrl: string | null = null;
 
   constructor(
     private config: ConfigService,
@@ -29,11 +30,28 @@ export class AgentService {
     @InjectRepository(Organization)
     private orgRepo: Repository<Organization>,
   ) {
-    const bucket = this.config.get<string>('S3_BUCKET');
-    const region = this.config.get<string>('AWS_REGION', 'us-east-1');
-    const endpoint = this.config.get<string>('S3_ENDPOINT'); // R2: https://<account-id>.r2.cloudflarestorage.com
-    if (bucket) {
-      this.bucket = bucket;
+    // Determine storage provider from env vars
+    const b2Bucket = this.config.get<string>('B2_BUCKET');
+    const s3Bucket = this.config.get<string>('S3_BUCKET');
+
+    if (b2Bucket) {
+      // Backblaze B2 via S3-compatible API
+      this.s3 = new S3Client({
+        endpoint: this.config.get<string>('B2_ENDPOINT'),
+        region: 'auto',
+        credentials: {
+          accessKeyId: this.config.get<string>('B2_KEY_ID')!,
+          secretAccessKey: this.config.get<string>('B2_APP_KEY')!,
+        },
+        forcePathStyle: false,
+      });
+      this.bucket = b2Bucket;
+      this.cdnUrl = this.config.get<string>('B2_CDN_URL') || null;
+    } else if (s3Bucket) {
+      // Existing S3/R2 logic
+      const region = this.config.get<string>('AWS_REGION', 'us-east-1');
+      const endpoint = this.config.get<string>('S3_ENDPOINT'); // R2: https://<account-id>.r2.cloudflarestorage.com
+      this.bucket = s3Bucket;
       this.s3 = new S3Client({
         region,
         ...(endpoint ? { endpoint, forcePathStyle: false } : {}),
@@ -89,6 +107,10 @@ export class AgentService {
 
   async getPresignedDownloadUrl(s3Key: string): Promise<string> {
     if (!this.s3 || !this.bucket) return '';
+    // If CDN URL is configured (B2 + Cloudflare CDN), serve directly — zero egress cost
+    if (this.cdnUrl) {
+      return `${this.cdnUrl}/${s3Key}`;
+    }
     const command = new GetObjectCommand({ Bucket: this.bucket, Key: s3Key });
     return getSignedUrl(this.s3, command, { expiresIn: 3600 });
   }
@@ -109,9 +131,24 @@ export class AgentService {
     return entities.length;
   }
 
-  async getOrgConfig(organizationId: string): Promise<{ screenshotIntervalSec: number }> {
-    const org = await this.orgRepo.findOne({ where: { id: organizationId }, select: ['id', 'screenshotIntervalSec'] });
-    return { screenshotIntervalSec: org?.screenshotIntervalSec ?? 300 };
+  async getOrgConfig(organizationId: string): Promise<{
+    screenshotIntervalSec: number;
+    streamingEnabled: boolean;
+    cameraEnabled: boolean;
+    audioEnabled: boolean;
+    maxStreamFps: number;
+  }> {
+    const org = await this.orgRepo.findOne({
+      where: { id: organizationId },
+      select: ['id', 'screenshotIntervalSec', 'streamingEnabled', 'cameraEnabled', 'audioEnabled', 'maxStreamFps'],
+    });
+    return {
+      screenshotIntervalSec: org?.screenshotIntervalSec ?? 300,
+      streamingEnabled: org?.streamingEnabled ?? false,
+      cameraEnabled: org?.cameraEnabled ?? false,
+      audioEnabled: org?.audioEnabled ?? false,
+      maxStreamFps: org?.maxStreamFps ?? 1,
+    };
   }
 
   async deleteS3Object(key: string): Promise<void> {
