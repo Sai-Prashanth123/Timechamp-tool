@@ -51,6 +51,9 @@ export class User {
   @Column({ default: true })
   isActive: boolean;
 
+  @Column({ name: 'agent_token', type: 'uuid', nullable: true, unique: true, select: false })
+  agentToken: string | null;
+
   @Column({ nullable: true })
   invitedBy: string;
 
