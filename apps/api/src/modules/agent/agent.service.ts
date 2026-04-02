@@ -8,6 +8,7 @@ import { ActivityEvent } from '../../database/entities/activity-event.entity';
 import { Screenshot } from '../../database/entities/screenshot.entity';
 import { GpsLocation } from '../../database/entities/gps-location.entity';
 import { User } from '../../database/entities/user.entity';
+import { Organization } from '../../database/entities/organization.entity';
 import { SyncActivityDto } from './dto/sync-activity.dto';
 import { SyncScreenshotDto } from './dto/sync-screenshot.dto';
 import { SyncGpsDto } from './dto/sync-gps.dto';
@@ -25,12 +26,18 @@ export class AgentService {
     private screenshotRepo: Repository<Screenshot>,
     @InjectRepository(GpsLocation)
     private gpsLocationRepo: Repository<GpsLocation>,
+    @InjectRepository(Organization)
+    private orgRepo: Repository<Organization>,
   ) {
     const bucket = this.config.get<string>('S3_BUCKET');
     const region = this.config.get<string>('AWS_REGION', 'us-east-1');
+    const endpoint = this.config.get<string>('S3_ENDPOINT'); // R2: https://<account-id>.r2.cloudflarestorage.com
     if (bucket) {
       this.bucket = bucket;
-      this.s3 = new S3Client({ region });
+      this.s3 = new S3Client({
+        region,
+        ...(endpoint ? { endpoint, forcePathStyle: false } : {}),
+      });
     }
   }
 
@@ -100,5 +107,16 @@ export class AgentService {
     );
     await this.gpsLocationRepo.save(entities);
     return entities.length;
+  }
+
+  async getOrgConfig(organizationId: string): Promise<{ screenshotIntervalSec: number }> {
+    const org = await this.orgRepo.findOne({ where: { id: organizationId }, select: ['id', 'screenshotIntervalSec'] });
+    return { screenshotIntervalSec: org?.screenshotIntervalSec ?? 300 };
+  }
+
+  async deleteS3Object(key: string): Promise<void> {
+    if (!this.s3 || !this.bucket) return;
+    const { DeleteObjectCommand } = await import('@aws-sdk/client-s3');
+    await this.s3.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }));
   }
 }

@@ -38,6 +38,9 @@ export class Organization {
   @Column({ nullable: true, default: 'UTC' })
   timezone: string;
 
+  @Column({ default: 300 })
+  screenshotIntervalSec: number;
+
   @Column({ default: true })
   isActive: boolean;
 

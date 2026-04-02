@@ -14,6 +14,8 @@ import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { GpsModule } from './modules/gps/gps.module';
 import { IntegrationsModule } from './modules/integrations/integrations.module';
 import { AlertsModule } from './modules/alerts/alerts.module';
+import { ScheduleModule } from '@nestjs/schedule';
+import { MaintenanceModule } from './modules/maintenance/maintenance.module';
 import { AlertRule } from './modules/alerts/alert-rule.entity';
 import { AlertEvent } from './modules/alerts/alert-event.entity';
 import { WebhookEndpoint } from './database/entities/webhook-endpoint.entity';
@@ -51,6 +53,7 @@ import { ProjectsModule } from './modules/projects/projects.module';
         APP_URL: Joi.string().uri().required(),
         S3_BUCKET: Joi.string().optional(),
         AWS_REGION: Joi.string().default('us-east-1'),
+        S3_ENDPOINT: Joi.string().uri().optional(),
       }),
     }),
     TypeOrmModule.forRootAsync({
@@ -89,6 +92,7 @@ import { ProjectsModule } from './modules/projects/projects.module';
       }),
     }),
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 1000 }]),
+    ScheduleModule.forRoot(),
     RedisModule,
     AuthModule,
     OrganizationsModule,
@@ -102,6 +106,7 @@ import { ProjectsModule } from './modules/projects/projects.module';
     GpsModule,
     IntegrationsModule,
     AlertsModule,
+    MaintenanceModule,
   ],
 })
 export class AppModule implements NestModule {

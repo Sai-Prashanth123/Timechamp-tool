@@ -68,4 +68,11 @@ export class AgentController {
     const saved = await this.service.saveGpsLocations(user, dto);
     return { saved };
   }
+
+  @Get('config')
+  @ApiOperation({ summary: 'Get agent configuration for the authenticated org' })
+  async getConfig(@AgentCurrentUser() user: User) {
+    const org = await this.service.getOrgConfig(user.organizationId);
+    return { screenshotIntervalSec: org.screenshotIntervalSec };
+  }
 }

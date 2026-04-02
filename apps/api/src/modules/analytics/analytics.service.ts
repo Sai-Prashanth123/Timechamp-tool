@@ -38,6 +38,14 @@ export class AnalyticsService {
     from: string,
     to: string,
   ): Promise<DailyProductivity[]> {
+    const today = new Date().toISOString().slice(0, 10);
+    const isPast = to < today;
+    const ttl = isPast ? 86400 : 300;
+    const cacheKey = `productivity:${organizationId}:${from}:${to}:${userId ?? 'all'}`;
+
+    const cached = await this.redis.get(cacheKey);
+    if (cached) return JSON.parse(cached) as DailyProductivity[];
+
     const fromDate = new Date(`${from}T00:00:00.000Z`);
     const toDate = new Date(`${to}T23:59:59.999Z`);
 
@@ -78,7 +86,7 @@ export class AnalyticsService {
       cursor.setUTCDate(cursor.getUTCDate() + 1);
     }
 
-    return dates.map((date) => {
+    const result = dates.map((date) => {
       const workedSec = workedSecByDate.get(date) ?? 0;
       // Cap active at worked to handle agent over-reporting
       const activeSec = Math.min(activeSecByDate.get(date) ?? 0, workedSec);
@@ -95,6 +103,9 @@ export class AnalyticsService {
         idleMins: Math.round(idleSec / 60),
       };
     });
+
+    await this.redis.set(cacheKey, JSON.stringify(result), ttl);
+    return result;
   }
 
   async getAppUsage(
@@ -103,6 +114,9 @@ export class AnalyticsService {
     from: string,
     to: string,
   ): Promise<AppUsageRow[]> {
+    const today = new Date().toISOString().slice(0, 10);
+    const isPast = to < today;
+    const ttl = isPast ? 86400 : 300;
     const cacheKey = `appusage:${organizationId}:${from}:${to}:${userId ?? 'all'}`;
     const cached = await this.redis.get(cacheKey);
     if (cached) return JSON.parse(cached) as AppUsageRow[];
@@ -134,7 +148,7 @@ export class AnalyticsService {
       }))
       .sort((a, b) => b.totalMins - a.totalMins);
 
-    await this.redis.set(cacheKey, JSON.stringify(result), 300);
+    await this.redis.set(cacheKey, JSON.stringify(result), ttl);
     return result;
   }
 
