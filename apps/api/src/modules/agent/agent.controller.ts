@@ -13,6 +13,7 @@ import { AgentAuthGuard } from './agent-auth.guard';
 import { AgentCurrentUser } from './agent-current-user.decorator';
 import { SyncActivityDto } from './dto/sync-activity.dto';
 import { SyncScreenshotDto } from './dto/sync-screenshot.dto';
+import { SyncGpsDto } from './dto/sync-gps.dto';
 import { User } from '../../database/entities/user.entity';
 
 @ApiTags('Agent Sync')
@@ -55,5 +56,16 @@ export class AgentController {
     @Body() dto: SyncScreenshotDto,
   ) {
     return this.service.saveScreenshot(user, dto);
+  }
+
+  @Post('gps')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Batch-upload GPS location points from the agent/mobile device' })
+  async syncGps(
+    @AgentCurrentUser() user: User,
+    @Body() dto: SyncGpsDto,
+  ) {
+    const saved = await this.service.saveGpsLocations(user, dto);
+    return { saved };
   }
 }

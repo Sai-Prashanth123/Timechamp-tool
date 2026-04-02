@@ -6,9 +6,11 @@ import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { ActivityEvent } from '../../database/entities/activity-event.entity';
 import { Screenshot } from '../../database/entities/screenshot.entity';
+import { GpsLocation } from '../../database/entities/gps-location.entity';
 import { User } from '../../database/entities/user.entity';
 import { SyncActivityDto } from './dto/sync-activity.dto';
 import { SyncScreenshotDto } from './dto/sync-screenshot.dto';
+import { SyncGpsDto } from './dto/sync-gps.dto';
 
 @Injectable()
 export class AgentService {
@@ -21,6 +23,8 @@ export class AgentService {
     private activityRepo: Repository<ActivityEvent>,
     @InjectRepository(Screenshot)
     private screenshotRepo: Repository<Screenshot>,
+    @InjectRepository(GpsLocation)
+    private gpsLocationRepo: Repository<GpsLocation>,
   ) {
     const bucket = this.config.get<string>('S3_BUCKET');
     const region = this.config.get<string>('AWS_REGION', 'us-east-1');
@@ -80,5 +84,21 @@ export class AgentService {
     if (!this.s3 || !this.bucket) return '';
     const command = new GetObjectCommand({ Bucket: this.bucket, Key: s3Key });
     return getSignedUrl(this.s3, command, { expiresIn: 3600 });
+  }
+
+  async saveGpsLocations(user: User, dto: SyncGpsDto): Promise<number> {
+    const entities = dto.points.map((p) =>
+      this.gpsLocationRepo.create({
+        userId: user.id,
+        organizationId: user.organizationId,
+        lat: p.lat,
+        lng: p.lng,
+        accuracy: p.accuracy ?? null,
+        batteryLevel: p.batteryLevel ?? null,
+        recordedAt: new Date(p.recordedAt),
+      }),
+    );
+    await this.gpsLocationRepo.save(entities);
+    return entities.length;
   }
 }

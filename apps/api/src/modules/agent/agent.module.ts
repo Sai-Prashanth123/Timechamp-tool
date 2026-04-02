@@ -6,9 +6,10 @@ import { AgentAuthGuard } from './agent-auth.guard';
 import { ActivityEvent } from '../../database/entities/activity-event.entity';
 import { Screenshot } from '../../database/entities/screenshot.entity';
 import { User } from '../../database/entities/user.entity';
+import { GpsLocation } from '../../database/entities/gps-location.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([ActivityEvent, Screenshot, User])],
+  imports: [TypeOrmModule.forFeature([ActivityEvent, Screenshot, User, GpsLocation])],
   controllers: [AgentController],
   providers: [AgentService, AgentAuthGuard],
   exports: [AgentService],
