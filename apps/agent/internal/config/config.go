@@ -32,6 +32,21 @@ type Config struct {
 
 	// DataDir is where the SQLite database is stored.
 	DataDir string
+
+	// StreamingEnabled controls whether the WebSocket streaming subsystem is active.
+	StreamingEnabled bool
+
+	// StreamingURL is the WebSocket URL of the streaming gateway.
+	StreamingURL string
+
+	// CameraEnabled enables webcam capture during full streaming sessions.
+	CameraEnabled bool
+
+	// AudioEnabled enables microphone capture during full streaming sessions.
+	AudioEnabled bool
+
+	// MaxStreamFPS is the maximum frames per second for screen streaming.
+	MaxStreamFPS int
 }
 
 // Load reads configuration from environment variables, falling back to defaults.
@@ -44,6 +59,11 @@ func Load() *Config {
 		IdleThreshold:      getEnvInt("TC_IDLE_THRESHOLD", 180),
 		MaxBufferDays:      getEnvInt("TC_MAX_BUFFER_DAYS", 7),
 		DataDir:            getEnv("TC_DATA_DIR", defaultDataDir()),
+		StreamingEnabled:   getEnvBool("TC_STREAMING_ENABLED", false),
+		StreamingURL:       getEnv("TC_STREAMING_URL", ""),
+		CameraEnabled:      getEnvBool("TC_CAMERA_ENABLED", false),
+		AudioEnabled:       getEnvBool("TC_AUDIO_ENABLED", false),
+		MaxStreamFPS:       getEnvInt("TC_MAX_STREAM_FPS", 1),
 	}
 }
 
@@ -54,6 +74,17 @@ func defaultDataDir() string {
 func getEnv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	v := os.Getenv(key)
+	if v == "true" || v == "1" {
+		return true
+	}
+	if v == "false" || v == "0" {
+		return false
 	}
 	return fallback
 }
