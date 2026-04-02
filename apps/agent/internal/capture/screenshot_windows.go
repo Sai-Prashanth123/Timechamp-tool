@@ -3,9 +3,7 @@
 package capture
 
 import (
-	"bytes"
 	"fmt"
-	"image/jpeg"
 	"os"
 	"path/filepath"
 	"time"
@@ -13,7 +11,8 @@ import (
 	"github.com/kbinani/screenshot"
 )
 
-// CaptureScreenshot captures the primary display and saves it as a JPEG.
+// CaptureScreenshot captures the primary display, resizes it to at most 1280 px
+// on the longest side, and saves it as a JPEG at quality 60.
 // On Windows it uses the kbinani/screenshot library (no CGo, pure Win32).
 // Returns the local file path on success.
 func CaptureScreenshot(dir string) (string, error) {
@@ -27,21 +26,15 @@ func CaptureScreenshot(dir string) (string, error) {
 		return "", fmt.Errorf("mkdir screenshots: %w", err)
 	}
 
-	filename := fmt.Sprintf("ss_%d.jpg", time.Now().UnixMilli())
-	path := filepath.Join(dir, filename)
-
-	f, err := os.Create(path)
+	data, err := resizeAndEncode(img)
 	if err != nil {
-		return "", fmt.Errorf("create file: %w", err)
-	}
-	defer f.Close()
-
-	var buf bytes.Buffer
-	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 75}); err != nil {
 		return "", fmt.Errorf("encode jpeg: %w", err)
 	}
 
-	if _, err := f.Write(buf.Bytes()); err != nil {
+	filename := fmt.Sprintf("ss_%d.jpg", time.Now().UnixMilli())
+	path := filepath.Join(dir, filename)
+
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return "", fmt.Errorf("write file: %w", err)
 	}
 
