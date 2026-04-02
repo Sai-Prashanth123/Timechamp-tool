@@ -194,6 +194,9 @@ describe('TimeTrackingService', () => {
 
       const result = await service.submitTimesheet('u-1', 'org-1', '2026-03-31');
 
+      expect(timesheetRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ totalMinutes: 720 }),
+      );
       expect(result.totalMinutes).toBe(720);
       expect(result.status).toBe(TimesheetStatus.SUBMITTED);
     });
