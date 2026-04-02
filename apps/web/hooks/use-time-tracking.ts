@@ -145,7 +145,11 @@ export function useDeleteEntry() {
       queryClient.invalidateQueries({ queryKey: ['time-entries'] });
       toast.success('Entry deleted');
     },
-    onError: () => toast.error('Failed to delete entry'),
+    onError: (err: unknown) => {
+      const message =
+        (err as any)?.response?.data?.message ?? 'Failed to delete entry';
+      toast.error(message);
+    },
   });
 }
 
@@ -195,7 +199,11 @@ export function useApproveTimesheet() {
       queryClient.invalidateQueries({ queryKey: ['timesheets'] });
       toast.success('Timesheet approved');
     },
-    onError: () => toast.error('Failed to approve timesheet'),
+    onError: (err: unknown) => {
+      const message =
+        (err as any)?.response?.data?.message ?? 'Failed to approve timesheet';
+      toast.error(message);
+    },
   });
 }
 
@@ -219,7 +227,11 @@ export function useRejectTimesheet() {
       queryClient.invalidateQueries({ queryKey: ['timesheets'] });
       toast.success('Timesheet rejected');
     },
-    onError: () => toast.error('Failed to reject timesheet'),
+    onError: (err: unknown) => {
+      const message =
+        (err as any)?.response?.data?.message ?? 'Failed to reject timesheet';
+      toast.error(message);
+    },
   });
 }
 
