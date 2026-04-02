@@ -33,6 +33,12 @@ export class TimeEntry {
   @Column({ name: 'attendance_id', nullable: true })
   attendanceId: string | null;
 
+  @Column({ name: 'project_id', nullable: true })
+  projectId: string | null;
+
+  @Column({ name: 'task_id', nullable: true })
+  taskId: string | null;
+
   @Column({ name: 'started_at', type: 'timestamptz' })
   startedAt: Date;
 
