@@ -60,7 +60,7 @@ import { StreamSession } from './database/entities/stream-session.entity';
         B2_KEY_ID: Joi.string().optional(),
         B2_APP_KEY: Joi.string().optional(),
         B2_CDN_URL: Joi.string().optional(),
-        STREAMING_ENABLED: Joi.string().valid('true', 'false').default('false'),
+        STREAMING_ENABLED: Joi.boolean().default(false),
         WS_CORS_ORIGIN: Joi.string().optional(),
         DAILY_BW_CAP_MB: Joi.number().default(500),
         SESSION_MAX_HOURS: Joi.number().default(8),

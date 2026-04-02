@@ -25,15 +25,15 @@ export class StreamSession {
   endedAt: Date;
 
   @Column({ type: 'bigint', default: 0 })
-  bytesRx: number;
+  bytesRx: string;
 
   @Column({ type: 'bigint', default: 0 })
-  bytesTx: number;
+  bytesTx: string;
 
   @Column({ default: true })
   isActive: boolean;
 
-  @Column({ default: 'idle' })
+  @Column({ type: 'enum', enum: ['idle', 'grid', 'full'], default: 'idle' })
   mode: StreamMode;
 
   @Column({ nullable: true, type: 'text' })
