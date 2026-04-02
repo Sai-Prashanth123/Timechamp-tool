@@ -42,8 +42,8 @@ func (e *DeltaEncoder) Encode(img image.Image, jpegQuality int) (byte, []byte, e
 
 	// Compute hashes for all blocks
 	newHashes := make([]uint32, totalBlocks)
-	for by := 0; by < gridH; by++ {
-		for bx := 0; bx < gridW; bx++ {
+	for by := range gridH {
+		for bx := range gridW {
 			idx := by*gridW + bx
 			newHashes[idx] = hashBlock(img, bounds.Min.X+bx*blockSize, bounds.Min.Y+by*blockSize)
 		}
@@ -97,8 +97,8 @@ func (e *DeltaEncoder) Encode(img image.Image, jpegQuality int) (byte, []byte, e
 	buf.Write(bitfield)
 
 	// Write JPEG data for each changed block
-	for by := 0; by < gridH; by++ {
-		for bx := 0; bx < gridW; bx++ {
+	for by := range gridH {
+		for bx := range gridW {
 			idx := by*gridW + bx
 			if !changed[idx] {
 				continue
@@ -129,8 +129,8 @@ func (e *DeltaEncoder) reset(w, h int) {
 // hashBlock computes a simple hash for a 16×16 block.
 func hashBlock(img image.Image, x, y int) uint32 {
 	var sum uint32
-	for dy := 0; dy < blockSize; dy++ {
-		for dx := 0; dx < blockSize; dx++ {
+	for dy := range blockSize {
+		for dx := range blockSize {
 			r, g, b, _ := img.At(x+dx, y+dy).RGBA()
 			sum += (r>>8)*31 + (g>>8)*37 + (b>>8)*41
 		}
@@ -159,8 +159,8 @@ func encodeBlockJPEG(img image.Image, x, y, quality int) ([]byte, error) {
 	}
 	// Fallback: copy pixels to RGBA
 	rgba := image.NewRGBA(image.Rect(0, 0, blockSize, blockSize))
-	for dy := 0; dy < blockSize; dy++ {
-		for dx := 0; dx < blockSize; dx++ {
+	for dy := range blockSize {
+		for dx := range blockSize {
 			rgba.Set(dx, dy, img.At(x+dx, y+dy))
 		}
 	}

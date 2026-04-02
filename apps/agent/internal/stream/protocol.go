@@ -53,7 +53,7 @@ func ParseFrame(data []byte) (*Frame, error) {
 }
 
 // BuildControlFrame creates a CONTROL frame with JSON payload.
-func BuildControlFrame(payload map[string]interface{}) []byte {
+func BuildControlFrame(payload map[string]any) []byte {
 	b, _ := json.Marshal(payload)
 	return BuildFrame(FrameTypeControl, b)
 }
