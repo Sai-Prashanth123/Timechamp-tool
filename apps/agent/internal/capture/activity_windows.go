@@ -4,7 +4,6 @@ package capture
 
 import (
 	"syscall"
-	"unicode/utf16"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -62,18 +61,3 @@ func getActiveWindow() (ActiveWindow, error) {
 	return ActiveWindow{AppName: appName, WindowTitle: title}, nil
 }
 
-// utf16PtrToString converts a UTF-16 pointer to a Go string.
-func utf16PtrToString(p *uint16) string {
-	if p == nil {
-		return ""
-	}
-	var s []uint16
-	for ptr := unsafe.Pointer(p); ; ptr = unsafe.Pointer(uintptr(ptr) + 2) {
-		v := *(*uint16)(ptr)
-		if v == 0 {
-			break
-		}
-		s = append(s, v)
-	}
-	return string(utf16.Decode(s))
-}
