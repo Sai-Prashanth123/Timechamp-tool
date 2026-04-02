@@ -1,0 +1,151 @@
+package sync
+
+import (
+	"fmt"
+	"path/filepath"
+	"time"
+
+	"github.com/timechamp/agent/internal/buffer"
+)
+
+const batchSize = 100
+
+// Uploader flushes the local SQLite buffer to the TimeChamp API.
+type Uploader struct {
+	client *Client
+	db     *buffer.DB
+}
+
+// NewUploader creates a new Uploader.
+func NewUploader(client *Client, db *buffer.DB) *Uploader {
+	return &Uploader{client: client, db: db}
+}
+
+// ActivityPayload is the JSON structure sent to the API.
+type ActivityPayload struct {
+	Events []ActivityEventDTO `json:"events"`
+}
+
+// ActivityEventDTO is the API wire format for one activity event.
+type ActivityEventDTO struct {
+	AppName     string    `json:"appName"`
+	WindowTitle string    `json:"windowTitle"`
+	URL         string    `json:"url"`
+	StartedAt   time.Time `json:"startedAt"`
+	EndedAt     time.Time `json:"endedAt"`
+}
+
+// KeystrokePayload is the JSON structure sent to the API.
+type KeystrokePayload struct {
+	Events []KeystrokeEventDTO `json:"events"`
+}
+
+// KeystrokeEventDTO is the API wire format for one keystroke record.
+type KeystrokeEventDTO struct {
+	KeysPerMin  int       `json:"keysPerMin"`
+	MousePerMin int       `json:"mousePerMin"`
+	RecordedAt  time.Time `json:"recordedAt"`
+}
+
+// FlushActivity uploads all unsynced activity events and removes them from the buffer.
+// Returns the number of events flushed.
+func (u *Uploader) FlushActivity() (int, error) {
+	if !u.client.IsAvailable() {
+		return 0, fmt.Errorf("API unavailable (circuit open)")
+	}
+
+	events, err := u.db.ListUnsyncedActivity(batchSize)
+	if err != nil {
+		return 0, fmt.Errorf("list activity: %w", err)
+	}
+	if len(events) == 0 {
+		return 0, nil
+	}
+
+	payload := ActivityPayload{}
+	ids := make([]int64, 0, len(events))
+	for _, e := range events {
+		payload.Events = append(payload.Events, ActivityEventDTO{
+			AppName:     e.AppName,
+			WindowTitle: e.WindowTitle,
+			URL:         e.URL,
+			StartedAt:   e.StartedAt,
+			EndedAt:     e.EndedAt,
+		})
+		ids = append(ids, e.ID)
+	}
+
+	if err := u.client.Post("/agent/activity", payload); err != nil {
+		return 0, fmt.Errorf("upload activity: %w", err)
+	}
+
+	if err := u.db.MarkActivitySynced(ids); err != nil {
+		return 0, fmt.Errorf("mark synced: %w", err)
+	}
+
+	return len(events), nil
+}
+
+// FlushKeystrokes uploads all unsynced keystroke records.
+func (u *Uploader) FlushKeystrokes() (int, error) {
+	if !u.client.IsAvailable() {
+		return 0, nil
+	}
+
+	events, err := u.db.ListUnsyncedKeystrokes(batchSize)
+	if err != nil {
+		return 0, err
+	}
+	if len(events) == 0 {
+		return 0, nil
+	}
+
+	payload := KeystrokePayload{}
+	ids := make([]int64, 0, len(events))
+	for _, e := range events {
+		payload.Events = append(payload.Events, KeystrokeEventDTO{
+			KeysPerMin:  e.KeysPerMin,
+			MousePerMin: e.MousePerMin,
+			RecordedAt:  e.RecordedAt,
+		})
+		ids = append(ids, e.ID)
+	}
+
+	if err := u.client.Post("/agent/keystrokes", payload); err != nil {
+		return 0, err
+	}
+
+	return len(events), u.db.MarkKeystrokesSynced(ids)
+}
+
+// FlushScreenshots uploads all unsynced screenshots via presigned S3 URLs.
+func (u *Uploader) FlushScreenshots() (int, error) {
+	if !u.client.IsAvailable() {
+		return 0, nil
+	}
+
+	records, err := u.db.ListUnsyncedScreenshots(10) // smaller batch for large files
+	if err != nil {
+		return 0, err
+	}
+
+	flushed := 0
+	for _, r := range records {
+		filename := filepath.Base(r.LocalPath)
+		uploadURL, s3Key, err := u.client.GetPresignedUploadURL(filename)
+		if err != nil {
+			continue // skip this screenshot, try next
+		}
+
+		if err := uploadFileToS3(u.client, r.LocalPath, uploadURL); err != nil {
+			continue
+		}
+
+		if err := u.db.MarkScreenshotSynced(r.ID, s3Key); err != nil {
+			continue
+		}
+		flushed++
+	}
+
+	return flushed, nil
+}
