@@ -90,7 +90,7 @@ export default function AnalyticsPage() {
               exportCSV.mutate({ from, to, userId: selectedUserId })
             }
           >
-            <Download className="h-4 w-4" />
+            <Download className="h-4 w-4" aria-hidden="true" />
             {exportCSV.isPending ? 'Exporting\u2026' : 'Export CSV'}
           </Button>
         </div>
