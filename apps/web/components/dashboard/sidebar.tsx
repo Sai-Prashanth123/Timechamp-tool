@@ -14,6 +14,7 @@ import {
   Bell,
   Settings,
   Monitor,
+  Radio,
 } from 'lucide-react';
 
 const navItems = [
@@ -21,6 +22,7 @@ const navItems = [
   { href: '/employees', label: 'Employees', icon: Users },
   { href: '/time-tracking', label: 'Time Tracking', icon: Clock },
   { href: '/monitoring', label: 'Monitoring', icon: Monitor },
+  { href: '/live', label: 'Live', icon: Radio },
   { href: '/projects', label: 'Projects', icon: FolderKanban },
   { href: '/gps', label: 'GPS & Field', icon: MapPin },
   { href: '/analytics', label: 'Analytics', icon: BarChart3 },
