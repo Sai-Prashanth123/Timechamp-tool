@@ -1,3 +1,5 @@
+//go:build windows
+
 package capture
 
 import (
@@ -12,6 +14,7 @@ import (
 )
 
 // CaptureScreenshot captures the primary display and saves it as a JPEG.
+// On Windows it uses the kbinani/screenshot library (no CGo, pure Win32).
 // Returns the local file path on success.
 func CaptureScreenshot(dir string) (string, error) {
 	bounds := screenshot.GetDisplayBounds(0)
