@@ -74,11 +74,16 @@ export function ScreenshotGallery({ userId, from, to }: Props) {
       {/* Lightbox */}
       {lightbox && (
         <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Screenshot preview"
           className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
           onClick={() => setLightbox(null)}
+          onKeyDown={(e) => e.key === 'Escape' && setLightbox(null)}
         >
           <div className="relative max-w-5xl w-full" onClick={(e) => e.stopPropagation()}>
             <Button
+              autoFocus
               variant="ghost"
               size="sm"
               className="absolute -top-10 right-0 text-white hover:text-white hover:bg-white/20"

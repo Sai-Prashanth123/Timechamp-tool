@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useSession } from 'next-auth/react';
 import { Header } from '@/components/dashboard/header';
 import { LiveStatusBoard } from '@/components/monitoring/live-status-board';
@@ -9,14 +9,27 @@ import { ScreenshotGallery } from '@/components/monitoring/screenshot-gallery';
 import { todayISO } from '@/hooks/use-monitoring';
 
 export default function MonitoringPage() {
-  const { data: session } = useSession();
+  const { data: session, status } = useSession();
   const isManager =
-    session?.user?.role === 'admin' || session?.user?.role === 'manager';
+    (session?.user?.role === 'admin' || session?.user?.role === 'manager');
 
-  const [selectedUserId, setSelectedUserId] = useState<string | undefined>(
-    isManager ? undefined : session?.user?.id,
-  );
+  const [selectedUserId, setSelectedUserId] = useState<string | undefined>(undefined);
   const [selectedDate, setSelectedDate] = useState(todayISO());
+
+  useEffect(() => {
+    if (status === 'authenticated' && !isManager && session?.user?.id) {
+      setSelectedUserId(session.user.id);
+    }
+  }, [status, isManager, session?.user?.id]);
+
+  if (status === 'loading') {
+    return (
+      <>
+        <Header title="Monitoring" />
+        <div className="p-6 text-slate-400 text-sm">Loading...</div>
+      </>
+    );
+  }
 
   const from = `${selectedDate}T00:00:00.000Z`;
   const to = `${selectedDate}T23:59:59.999Z`;
