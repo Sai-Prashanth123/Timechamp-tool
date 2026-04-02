@@ -10,6 +10,7 @@ import { BillingModule } from './modules/billing/billing.module';
 import { TimeTrackingModule } from './modules/time-tracking/time-tracking.module';
 import { AgentModule } from './modules/agent/agent.module';
 import { MonitoringModule } from './modules/monitoring/monitoring.module';
+import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { RedisModule } from './infrastructure/redis/redis.module';
 import { TenantMiddleware } from './common/middleware/tenant.middleware';
 import { Organization } from './database/entities/organization.entity';
@@ -72,6 +73,7 @@ import { Screenshot } from './database/entities/screenshot.entity';
     TimeTrackingModule,
     AgentModule,
     MonitoringModule,
+    AnalyticsModule,
   ],
 })
 export class AppModule implements NestModule {
