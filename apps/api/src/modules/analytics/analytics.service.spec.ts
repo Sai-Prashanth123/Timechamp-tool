@@ -4,6 +4,7 @@ import { AnalyticsService } from './analytics.service';
 import { ActivityEvent } from '../../database/entities/activity-event.entity';
 import { Attendance } from '../../database/entities/attendance.entity';
 import { TimeEntry } from '../../database/entities/time-entry.entity';
+import { RedisService } from '../../infrastructure/redis/redis.service';
 
 type MockRepo = { find: jest.Mock };
 function mockRepo(): MockRepo {
@@ -15,11 +16,13 @@ describe('AnalyticsService', () => {
   let activityRepo: MockRepo;
   let attendanceRepo: MockRepo;
   let timeEntryRepo: MockRepo;
+  let redisService: { get: jest.Mock; set: jest.Mock; del: jest.Mock };
 
   beforeEach(async () => {
     activityRepo = mockRepo();
     attendanceRepo = mockRepo();
     timeEntryRepo = mockRepo();
+    redisService = { get: jest.fn().mockResolvedValue(null), set: jest.fn().mockResolvedValue(undefined), del: jest.fn().mockResolvedValue(undefined) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -27,6 +30,7 @@ describe('AnalyticsService', () => {
         { provide: getRepositoryToken(ActivityEvent), useValue: activityRepo },
         { provide: getRepositoryToken(Attendance), useValue: attendanceRepo },
         { provide: getRepositoryToken(TimeEntry), useValue: timeEntryRepo },
+        { provide: RedisService, useValue: redisService },
       ],
     }).compile();
 

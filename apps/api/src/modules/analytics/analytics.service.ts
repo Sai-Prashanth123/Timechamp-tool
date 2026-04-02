@@ -4,6 +4,7 @@ import { Repository, Between } from 'typeorm';
 import { ActivityEvent } from '../../database/entities/activity-event.entity';
 import { Attendance } from '../../database/entities/attendance.entity';
 import { TimeEntry } from '../../database/entities/time-entry.entity';
+import { RedisService } from '../../infrastructure/redis/redis.service';
 
 export type DailyProductivity = {
   date: string;       // YYYY-MM-DD
@@ -28,6 +29,7 @@ export class AnalyticsService {
     private attendanceRepo: Repository<Attendance>,
     @InjectRepository(TimeEntry)
     private timeEntryRepo: Repository<TimeEntry>,
+    private redis: RedisService,
   ) {}
 
   async getProductivity(
@@ -101,6 +103,10 @@ export class AnalyticsService {
     from: string,
     to: string,
   ): Promise<AppUsageRow[]> {
+    const cacheKey = `appusage:${organizationId}:${from}:${to}:${userId ?? 'all'}`;
+    const cached = await this.redis.get(cacheKey);
+    if (cached) return JSON.parse(cached) as AppUsageRow[];
+
     const where: any = {
       organizationId,
       startedAt: Between(
@@ -120,13 +126,16 @@ export class AnalyticsService {
     const totalSec = [...totals.values()].reduce((a, b) => a + b, 0);
     if (totalSec === 0) return [];
 
-    return [...totals.entries()]
+    const result = [...totals.entries()]
       .map(([appName, sec]) => ({
         appName,
         totalMins: Math.round(sec / 60),
         percentage: Math.round((sec / totalSec) * 100),
       }))
       .sort((a, b) => b.totalMins - a.totalMins);
+
+    await this.redis.set(cacheKey, JSON.stringify(result), 300);
+    return result;
   }
 
   /** RFC 4180 CSV field escaping */

@@ -11,6 +11,14 @@ import { TimeTrackingModule } from './modules/time-tracking/time-tracking.module
 import { AgentModule } from './modules/agent/agent.module';
 import { MonitoringModule } from './modules/monitoring/monitoring.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
+import { GpsModule } from './modules/gps/gps.module';
+import { IntegrationsModule } from './modules/integrations/integrations.module';
+import { AlertsModule } from './modules/alerts/alerts.module';
+import { AlertRule } from './modules/alerts/alert-rule.entity';
+import { AlertEvent } from './modules/alerts/alert-event.entity';
+import { WebhookEndpoint } from './database/entities/webhook-endpoint.entity';
+import { WebhookDelivery } from './database/entities/webhook-delivery.entity';
+import { SlackIntegration } from './database/entities/slack-integration.entity';
 import { RedisModule } from './infrastructure/redis/redis.module';
 import { TenantMiddleware } from './common/middleware/tenant.middleware';
 import { Organization } from './database/entities/organization.entity';
@@ -22,6 +30,12 @@ import { TimeEntry } from './database/entities/time-entry.entity';
 import { Timesheet } from './database/entities/timesheet.entity';
 import { ActivityEvent } from './database/entities/activity-event.entity';
 import { Screenshot } from './database/entities/screenshot.entity';
+import { Project } from './database/entities/project.entity';
+import { Task } from './database/entities/task.entity';
+import { Milestone } from './database/entities/milestone.entity';
+import { GpsLocation } from './database/entities/gps-location.entity';
+import { Geofence } from './database/entities/geofence.entity';
+import { ProjectsModule } from './modules/projects/projects.module';
 
 @Module({
   imports: [
@@ -54,6 +68,16 @@ import { Screenshot } from './database/entities/screenshot.entity';
           Timesheet,
           ActivityEvent,
           Screenshot,
+          Project,
+          Task,
+          Milestone,
+          GpsLocation,
+          Geofence,
+          WebhookEndpoint,
+          WebhookDelivery,
+          SlackIntegration,
+          AlertRule,
+          AlertEvent,
         ],
         migrations: ['dist/database/migrations/*.js'],
         migrationsRun: config.get('NODE_ENV') !== 'production',
@@ -74,6 +98,10 @@ import { Screenshot } from './database/entities/screenshot.entity';
     AgentModule,
     MonitoringModule,
     AnalyticsModule,
+    ProjectsModule,
+    GpsModule,
+    IntegrationsModule,
+    AlertsModule,
   ],
 })
 export class AppModule implements NestModule {

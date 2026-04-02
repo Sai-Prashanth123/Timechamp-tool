@@ -5,6 +5,7 @@ import { ActivityEvent } from '../../database/entities/activity-event.entity';
 import { Screenshot } from '../../database/entities/screenshot.entity';
 import { Attendance } from '../../database/entities/attendance.entity';
 import { AgentService } from '../agent/agent.service';
+import { RedisService } from '../../infrastructure/redis/redis.service';
 
 export type LiveEmployee = {
   userId: string;
@@ -33,6 +34,7 @@ export class MonitoringService {
     @InjectRepository(Attendance)
     private attendanceRepo: Repository<Attendance>,
     private agentService: AgentService,
+    private redis: RedisService,
   ) {}
 
   async getActivity(
@@ -80,13 +82,17 @@ export class MonitoringService {
   }
 
   async getLiveStatus(organizationId: string): Promise<LiveEmployee[]> {
+    const cacheKey = `live:${organizationId}`;
+    const cached = await this.redis.get(cacheKey);
+    if (cached) return JSON.parse(cached) as LiveEmployee[];
+
     const openAttendances = await this.attendanceRepo.find({
       where: { organizationId, clockOut: null as any },
       relations: ['user'],
       order: { clockIn: 'ASC' },
     });
 
-    return Promise.all(
+    const result = await Promise.all(
       openAttendances.map(async (att) => {
         const lastActivity = await this.activityRepo.findOne({
           where: { userId: att.userId, organizationId },
@@ -102,5 +108,8 @@ export class MonitoringService {
         };
       }),
     );
+
+    await this.redis.set(cacheKey, JSON.stringify(result), 30);
+    return result;
   }
 }

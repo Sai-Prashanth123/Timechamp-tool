@@ -6,6 +6,7 @@ import { Screenshot } from '../../database/entities/screenshot.entity';
 import { Attendance } from '../../database/entities/attendance.entity';
 import { User } from '../../database/entities/user.entity';
 import { AgentService } from '../agent/agent.service';
+import { RedisService } from '../../infrastructure/redis/redis.service';
 
 type MockRepo = {
   find: jest.Mock;
@@ -27,12 +28,14 @@ describe('MonitoringService', () => {
   let screenshotRepo: MockRepo;
   let attendanceRepo: MockRepo;
   let agentService: { getPresignedDownloadUrl: jest.Mock };
+  let redisService: { get: jest.Mock; set: jest.Mock; del: jest.Mock };
 
   beforeEach(async () => {
     activityRepo = mockRepo();
     screenshotRepo = mockRepo();
     attendanceRepo = mockRepo();
     agentService = { getPresignedDownloadUrl: jest.fn().mockResolvedValue('https://s3.example.com/signed') };
+    redisService = { get: jest.fn().mockResolvedValue(null), set: jest.fn().mockResolvedValue(undefined), del: jest.fn().mockResolvedValue(undefined) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -41,6 +44,7 @@ describe('MonitoringService', () => {
         { provide: getRepositoryToken(Screenshot), useValue: screenshotRepo },
         { provide: getRepositoryToken(Attendance), useValue: attendanceRepo },
         { provide: AgentService, useValue: agentService },
+        { provide: RedisService, useValue: redisService },
       ],
     }).compile();
 
