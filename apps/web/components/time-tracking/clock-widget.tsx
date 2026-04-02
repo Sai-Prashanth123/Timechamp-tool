@@ -58,12 +58,12 @@ export function ClockWidget() {
             <div className="flex flex-col items-center gap-1">
               <p className="text-sm text-slate-500">Working since</p>
               <p className="text-sm font-medium text-slate-700">
-                {new Date(status!.clockIn).toLocaleTimeString(undefined, {
+                {new Date(status?.clockIn ?? '').toLocaleTimeString(undefined, {
                   hour: '2-digit',
                   minute: '2-digit',
                 })}
               </p>
-              <ElapsedTimer since={status!.clockIn} />
+              <ElapsedTimer since={status?.clockIn ?? ''} />
             </div>
             <Button
               size="lg"

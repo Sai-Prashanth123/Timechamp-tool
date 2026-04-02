@@ -11,7 +11,7 @@ import {
 import { useSession } from 'next-auth/react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { useState } from 'react';
+import { useState, Fragment } from 'react';
 
 const statusColors: Record<string, string> = {
   draft: 'bg-slate-100 text-slate-600',
@@ -83,9 +83,8 @@ export function TimesheetsView() {
               </thead>
               <tbody>
                 {timesheets.map((ts) => (
-                  <>
+                  <Fragment key={ts.id}>
                     <tr
-                      key={ts.id}
                       className="border-b last:border-0 hover:bg-slate-50"
                     >
                       <td className="px-4 py-3 font-medium text-slate-700">
@@ -140,10 +139,11 @@ export function TimesheetsView() {
                       )}
                     </tr>
                     {rejectingId === ts.id && (
-                      <tr key={`${ts.id}-reject`} className="bg-red-50">
+                      <tr className="bg-red-50">
                         <td colSpan={isManager ? 5 : 4} className="px-4 py-3">
                           <div className="flex gap-2 items-center">
                             <input
+                              aria-label="Rejection reason"
                               className="flex-1 border border-red-200 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-300"
                               placeholder="Reason for rejection..."
                               value={rejectNote}
@@ -171,7 +171,7 @@ export function TimesheetsView() {
                         </td>
                       </tr>
                     )}
-                  </>
+                  </Fragment>
                 ))}
               </tbody>
             </table>
