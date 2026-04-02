@@ -39,6 +39,7 @@ import { GpsLocation } from './database/entities/gps-location.entity';
 import { Geofence } from './database/entities/geofence.entity';
 import { ProjectsModule } from './modules/projects/projects.module';
 import { StreamSession } from './database/entities/stream-session.entity';
+import { StreamingModule } from './modules/streaming/streaming.module';
 
 @Module({
   imports: [
@@ -118,6 +119,7 @@ import { StreamSession } from './database/entities/stream-session.entity';
     IntegrationsModule,
     AlertsModule,
     MaintenanceModule,
+    StreamingModule,
   ],
 })
 export class AppModule implements NestModule {

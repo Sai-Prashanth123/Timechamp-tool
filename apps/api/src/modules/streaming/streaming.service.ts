@@ -54,4 +54,32 @@ export class StreamingService {
       .groupBy('s.userId')
       .getRawMany();
   }
+
+  async getOrgStreamingConfig(orgId: string) {
+    const org = await this.orgRepo.findOne({
+      where: { id: orgId },
+      select: ['id', 'streamingEnabled', 'cameraEnabled', 'audioEnabled', 'maxStreamFps', 'dailyBandwidthCapMb'],
+    });
+    return {
+      streamingEnabled: org?.streamingEnabled ?? false,
+      cameraEnabled: org?.cameraEnabled ?? false,
+      audioEnabled: org?.audioEnabled ?? false,
+      maxStreamFps: org?.maxStreamFps ?? 1,
+      dailyBandwidthCapMb: org?.dailyBandwidthCapMb ?? 500,
+    };
+  }
+
+  async updateOrgStreamingConfig(
+    orgId: string,
+    updates: Partial<{
+      streamingEnabled: boolean;
+      cameraEnabled: boolean;
+      audioEnabled: boolean;
+      maxStreamFps: number;
+      dailyBandwidthCapMb: number;
+    }>,
+  ) {
+    await this.orgRepo.update({ id: orgId }, updates);
+    return this.getOrgStreamingConfig(orgId);
+  }
 }

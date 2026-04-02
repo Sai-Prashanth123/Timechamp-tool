@@ -131,9 +131,24 @@ export class AgentService {
     return entities.length;
   }
 
-  async getOrgConfig(organizationId: string): Promise<{ screenshotIntervalSec: number }> {
-    const org = await this.orgRepo.findOne({ where: { id: organizationId }, select: ['id', 'screenshotIntervalSec'] });
-    return { screenshotIntervalSec: org?.screenshotIntervalSec ?? 300 };
+  async getOrgConfig(organizationId: string): Promise<{
+    screenshotIntervalSec: number;
+    streamingEnabled: boolean;
+    cameraEnabled: boolean;
+    audioEnabled: boolean;
+    maxStreamFps: number;
+  }> {
+    const org = await this.orgRepo.findOne({
+      where: { id: organizationId },
+      select: ['id', 'screenshotIntervalSec', 'streamingEnabled', 'cameraEnabled', 'audioEnabled', 'maxStreamFps'],
+    });
+    return {
+      screenshotIntervalSec: org?.screenshotIntervalSec ?? 300,
+      streamingEnabled: org?.streamingEnabled ?? false,
+      cameraEnabled: org?.cameraEnabled ?? false,
+      audioEnabled: org?.audioEnabled ?? false,
+      maxStreamFps: org?.maxStreamFps ?? 1,
+    };
   }
 
   async deleteS3Object(key: string): Promise<void> {
