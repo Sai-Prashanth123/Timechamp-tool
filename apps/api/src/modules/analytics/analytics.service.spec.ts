@@ -168,5 +168,20 @@ describe('AnalyticsService', () => {
       const csv = await service.exportTimeEntriesCSV('u-1', 'org-1', '2026-04-02', '2026-04-02');
       expect(csv.trim()).toBe('Date,Start,End,Duration (min),Description,Source');
     });
+
+    it('wraps description in quotes when it contains a comma', async () => {
+      timeEntryRepo.find.mockResolvedValue([
+        {
+          startedAt: new Date('2026-04-02T09:00:00.000Z'),
+          endedAt: new Date('2026-04-02T10:00:00.000Z'),
+          description: 'fix bug, add feature',
+          source: 'manual',
+        },
+      ]);
+
+      const csv = await service.exportTimeEntriesCSV('u-1', 'org-1', '2026-04-02', '2026-04-02');
+      const lines = csv.trim().split('\n');
+      expect(lines[1]).toContain('"fix bug, add feature"');
+    });
   });
 });

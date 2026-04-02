@@ -129,6 +129,14 @@ export class AnalyticsService {
       .sort((a, b) => b.totalMins - a.totalMins);
   }
 
+  /** RFC 4180 CSV field escaping */
+  private csvField(value: string): string {
+    if (value.includes(',') || value.includes('"') || value.includes('\n')) {
+      return `"${value.replace(/"/g, '""')}"`;
+    }
+    return value;
+  }
+
   async exportTimeEntriesCSV(
     userId: string | undefined,
     organizationId: string,
@@ -158,8 +166,7 @@ export class AnalyticsService {
       const durationMins = e.endedAt
         ? Math.round((e.endedAt.getTime() - e.startedAt.getTime()) / 60_000)
         : 0;
-      // Escape commas in description
-      const desc = (e.description ?? '').replace(/,/g, ';');
+      const desc = this.csvField(e.description ?? '');
       return `${date},${start},${end},${durationMins},${desc},${e.source}`;
     });
 
