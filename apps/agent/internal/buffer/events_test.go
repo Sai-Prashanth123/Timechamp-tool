@@ -120,7 +120,6 @@ func TestPruneOldRecords(t *testing.T) {
 		WindowTitle: "Old Window",
 		StartedAt:   time.Now().Add(-8 * 24 * time.Hour),
 		EndedAt:     time.Now().Add(-8 * 24 * time.Hour),
-		Synced:      true,
 	}
 	if err := db.InsertActivity(old); err != nil {
 		t.Fatal(err)

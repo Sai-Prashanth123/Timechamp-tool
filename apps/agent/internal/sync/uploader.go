@@ -28,6 +28,8 @@ type ActivityPayload struct {
 
 // ActivityEventDTO is the API wire format for one activity event.
 type ActivityEventDTO struct {
+	EmployeeID  string    `json:"employeeId"`
+	OrgID       string    `json:"orgId"`
 	AppName     string    `json:"appName"`
 	WindowTitle string    `json:"windowTitle"`
 	URL         string    `json:"url"`
@@ -42,6 +44,8 @@ type KeystrokePayload struct {
 
 // KeystrokeEventDTO is the API wire format for one keystroke record.
 type KeystrokeEventDTO struct {
+	EmployeeID  string    `json:"employeeId"`
+	OrgID       string    `json:"orgId"`
 	KeysPerMin  int       `json:"keysPerMin"`
 	MousePerMin int       `json:"mousePerMin"`
 	RecordedAt  time.Time `json:"recordedAt"`
@@ -66,6 +70,8 @@ func (u *Uploader) FlushActivity() (int, error) {
 	ids := make([]int64, 0, len(events))
 	for _, e := range events {
 		payload.Events = append(payload.Events, ActivityEventDTO{
+			EmployeeID:  e.EmployeeID,
+			OrgID:       e.OrgID,
 			AppName:     e.AppName,
 			WindowTitle: e.WindowTitle,
 			URL:         e.URL,
@@ -104,6 +110,8 @@ func (u *Uploader) FlushKeystrokes() (int, error) {
 	ids := make([]int64, 0, len(events))
 	for _, e := range events {
 		payload.Events = append(payload.Events, KeystrokeEventDTO{
+			EmployeeID:  e.EmployeeID,
+			OrgID:       e.OrgID,
 			KeysPerMin:  e.KeysPerMin,
 			MousePerMin: e.MousePerMin,
 			RecordedAt:  e.RecordedAt,

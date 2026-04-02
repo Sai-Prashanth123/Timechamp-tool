@@ -15,6 +15,9 @@ type Config struct {
 	// OrgID is the organization this agent belongs to.
 	OrgID string
 
+	// EmployeeID is this agent's employee identifier.
+	EmployeeID string
+
 	// ScreenshotInterval is how often (seconds) to capture a screenshot.
 	ScreenshotInterval int
 

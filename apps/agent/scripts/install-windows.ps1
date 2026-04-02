@@ -53,6 +53,10 @@ sc.exe description $serviceName "TimeChamp workforce intelligence agent" | Out-N
 Start-Service -Name $serviceName
 Write-Host "Service '$serviceName' installed and started." -ForegroundColor Green
 
+# Clear the invite token — it's single-use, don't leave it in the environment
+[System.Environment]::SetEnvironmentVariable("TC_INVITE_TOKEN", $null, "Machine")
+Write-Host "Invite token cleared from environment."
+
 # Verify
 $svc = Get-Service -Name $serviceName
 Write-Host "Service status: $($svc.Status)"

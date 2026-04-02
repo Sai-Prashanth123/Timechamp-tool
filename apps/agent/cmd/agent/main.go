@@ -23,6 +23,14 @@ func main() {
 
 	cfg := config.Load()
 
+	// Load saved identity (orgID + employeeID) from previous registration
+	identity, err := config.LoadIdentity(cfg.DataDir)
+	if err != nil {
+		log.Printf("Warning: could not load identity: %v", err)
+	}
+	cfg.OrgID = identity.OrgID
+	cfg.EmployeeID = identity.EmployeeID
+
 	// Load auth token from OS keychain
 	token, err := keychain.LoadToken()
 	if err != nil || token == "" {
@@ -44,8 +52,13 @@ func main() {
 			log.Fatalf("Failed to save token: %v", saveErr)
 		}
 
+		if saveErr := config.SaveIdentity(cfg.DataDir, orgID, employeeID); saveErr != nil {
+			log.Fatalf("Failed to save identity: %v", saveErr)
+		}
+
 		token = regToken
 		cfg.OrgID = orgID
+		cfg.EmployeeID = employeeID
 		log.Printf("Agent registered for org %s employee %s", orgID, employeeID)
 	}
 
@@ -93,9 +106,22 @@ func main() {
 
 		case <-quit:
 			log.Println("Shutting down agent...")
+			// Flush current window session
+			if currentWindow.AppName != "" {
+				_ = db.InsertActivity(buffer.ActivityEvent{
+					EmployeeID:  cfg.EmployeeID,
+					OrgID:       cfg.OrgID,
+					AppName:     currentWindow.AppName,
+					WindowTitle: currentWindow.WindowTitle,
+					URL:         currentWindow.URL,
+					StartedAt:   windowStarted,
+					EndedAt:     time.Now(),
+				})
+			}
 			// Final sync before exit
 			_, _ = uploader.FlushActivity()
 			_, _ = uploader.FlushKeystrokes()
+			_, _ = uploader.FlushScreenshots()
 			return
 
 		case <-activityTicker.C:
@@ -110,6 +136,7 @@ func main() {
 				// Record end of current session if one was active
 				if currentWindow.AppName != "" {
 					_ = db.InsertActivity(buffer.ActivityEvent{
+						EmployeeID:  cfg.EmployeeID,
 						OrgID:       cfg.OrgID,
 						AppName:     currentWindow.AppName,
 						WindowTitle: currentWindow.WindowTitle,
@@ -126,6 +153,7 @@ func main() {
 			if win.AppName != currentWindow.AppName || win.WindowTitle != currentWindow.WindowTitle {
 				if currentWindow.AppName != "" {
 					_ = db.InsertActivity(buffer.ActivityEvent{
+						EmployeeID:  cfg.EmployeeID,
 						OrgID:       cfg.OrgID,
 						AppName:     currentWindow.AppName,
 						WindowTitle: currentWindow.WindowTitle,
@@ -151,6 +179,7 @@ func main() {
 			}
 
 			_ = db.InsertScreenshot(buffer.ScreenshotRecord{
+				EmployeeID: cfg.EmployeeID,
 				OrgID:      cfg.OrgID,
 				LocalPath:  path,
 				CapturedAt: time.Now(),
@@ -160,6 +189,7 @@ func main() {
 			keys, mouse := inputCounter.Drain()
 			if keys > 0 || mouse > 0 {
 				_ = db.InsertKeystroke(buffer.KeystrokeEvent{
+					EmployeeID:  cfg.EmployeeID,
 					OrgID:       cfg.OrgID,
 					KeysPerMin:  keys,
 					MousePerMin: mouse,

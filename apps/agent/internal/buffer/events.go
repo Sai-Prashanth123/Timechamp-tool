@@ -172,25 +172,20 @@ func (db *DB) MarkKeystrokesSynced(ids []int64) error {
 	return nil
 }
 
-// PruneSynced removes synced records older than maxDays days.
-// For activity_events it uses started_at, for screenshots captured_at,
-// and for keystroke_events recorded_at — these represent when the event
-// actually occurred, not when it was written to the buffer.
+// PruneSynced removes records older than maxDays days that have already been
+// synced (deleted) or are too old to be useful. Since synced records are
+// deleted immediately, this removes old unsynced records that can no longer
+// be sent (e.g., after prolonged offline period).
 func (db *DB) PruneSynced(maxDays int) error {
 	cutoff := time.Now().UTC().AddDate(0, 0, -maxDays)
-
-	queries := []struct {
-		table string
-		col   string
-	}{
+	queries := []struct{ table, col string }{
 		{"activity_events", "started_at"},
 		{"screenshots", "captured_at"},
 		{"keystroke_events", "recorded_at"},
 	}
-
 	for _, q := range queries {
 		_, err := db.conn.Exec(
-			`DELETE FROM `+q.table+` WHERE synced = 1 AND `+q.col+` < ?`, cutoff,
+			`DELETE FROM `+q.table+` WHERE `+q.col+` < ?`, cutoff,
 		)
 		if err != nil {
 			return err
