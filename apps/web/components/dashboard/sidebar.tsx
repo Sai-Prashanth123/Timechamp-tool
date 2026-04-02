@@ -13,12 +13,14 @@ import {
   Plug,
   Bell,
   Settings,
+  Monitor,
 } from 'lucide-react';
 
 const navItems = [
   { href: '/overview', label: 'Overview', icon: LayoutDashboard },
   { href: '/employees', label: 'Employees', icon: Users },
   { href: '/time-tracking', label: 'Time Tracking', icon: Clock },
+  { href: '/monitoring', label: 'Monitoring', icon: Monitor },
   { href: '/projects', label: 'Projects', icon: FolderKanban },
   { href: '/gps', label: 'GPS & Field', icon: MapPin },
   { href: '/analytics', label: 'Analytics', icon: BarChart3 },
