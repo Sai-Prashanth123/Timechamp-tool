@@ -7,12 +7,16 @@ import { AuthModule } from './modules/auth/auth.module';
 import { OrganizationsModule } from './modules/organizations/organizations.module';
 import { UsersModule } from './modules/users/users.module';
 import { BillingModule } from './modules/billing/billing.module';
+import { TimeTrackingModule } from './modules/time-tracking/time-tracking.module';
 import { RedisModule } from './infrastructure/redis/redis.module';
 import { TenantMiddleware } from './common/middleware/tenant.middleware';
 import { Organization } from './database/entities/organization.entity';
 import { User } from './database/entities/user.entity';
 import { Subscription } from './database/entities/subscription.entity';
 import { RefreshToken } from './database/entities/refresh-token.entity';
+import { Attendance } from './database/entities/attendance.entity';
+import { TimeEntry } from './database/entities/time-entry.entity';
+import { Timesheet } from './database/entities/timesheet.entity';
 
 @Module({
   imports: [
@@ -33,7 +37,15 @@ import { RefreshToken } from './database/entities/refresh-token.entity';
       useFactory: (config: ConfigService) => ({
         type: 'postgres',
         url: config.get('DATABASE_URL'),
-        entities: [Organization, User, Subscription, RefreshToken],
+        entities: [
+          Organization,
+          User,
+          Subscription,
+          RefreshToken,
+          Attendance,
+          TimeEntry,
+          Timesheet,
+        ],
         migrations: ['dist/database/migrations/*.js'],
         migrationsRun: config.get('NODE_ENV') !== 'production',
         logging: config.get('NODE_ENV') !== 'production',
@@ -49,6 +61,7 @@ import { RefreshToken } from './database/entities/refresh-token.entity';
     OrganizationsModule,
     UsersModule,
     BillingModule,
+    TimeTrackingModule,
   ],
 })
 export class AppModule implements NestModule {
