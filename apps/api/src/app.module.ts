@@ -8,6 +8,7 @@ import { OrganizationsModule } from './modules/organizations/organizations.modul
 import { UsersModule } from './modules/users/users.module';
 import { BillingModule } from './modules/billing/billing.module';
 import { TimeTrackingModule } from './modules/time-tracking/time-tracking.module';
+import { AgentModule } from './modules/agent/agent.module';
 import { RedisModule } from './infrastructure/redis/redis.module';
 import { TenantMiddleware } from './common/middleware/tenant.middleware';
 import { Organization } from './database/entities/organization.entity';
@@ -17,6 +18,8 @@ import { RefreshToken } from './database/entities/refresh-token.entity';
 import { Attendance } from './database/entities/attendance.entity';
 import { TimeEntry } from './database/entities/time-entry.entity';
 import { Timesheet } from './database/entities/timesheet.entity';
+import { ActivityEvent } from './database/entities/activity-event.entity';
+import { Screenshot } from './database/entities/screenshot.entity';
 
 @Module({
   imports: [
@@ -45,6 +48,8 @@ import { Timesheet } from './database/entities/timesheet.entity';
           Attendance,
           TimeEntry,
           Timesheet,
+          ActivityEvent,
+          Screenshot,
         ],
         migrations: ['dist/database/migrations/*.js'],
         migrationsRun: config.get('NODE_ENV') !== 'production',
@@ -62,6 +67,7 @@ import { Timesheet } from './database/entities/timesheet.entity';
     UsersModule,
     BillingModule,
     TimeTrackingModule,
+    AgentModule,
   ],
 })
 export class AppModule implements NestModule {
