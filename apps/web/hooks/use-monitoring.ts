@@ -1,6 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
-import { toast } from 'sonner';
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -55,13 +54,8 @@ export function useActivity(params?: {
   return useQuery({
     queryKey: ['monitoring-activity', params],
     queryFn: async () => {
-      try {
-        const { data } = await api.get('/monitoring/activity', { params });
-        return data.data as ActivityEvent[];
-      } catch {
-        toast.error('Failed to load activity');
-        throw new Error('Failed to load activity');
-      }
+      const { data } = await api.get('/monitoring/activity', { params });
+      return data.data as ActivityEvent[];
     },
   });
 }
@@ -76,13 +70,8 @@ export function useScreenshots(params?: {
   return useQuery({
     queryKey: ['monitoring-screenshots', params],
     queryFn: async () => {
-      try {
-        const { data } = await api.get('/monitoring/screenshots', { params });
-        return data.data as ScreenshotItem[];
-      } catch {
-        toast.error('Failed to load screenshots');
-        throw new Error('Failed to load screenshots');
-      }
+      const { data } = await api.get('/monitoring/screenshots', { params });
+      return data.data as ScreenshotItem[];
     },
   });
 }
@@ -91,7 +80,7 @@ export function useScreenshots(params?: {
 
 /** Elapsed time from a date string to now, formatted "Xh Ym" */
 export function elapsedSince(isoString: string): string {
-  const ms = Date.now() - new Date(isoString).getTime();
+  const ms = Math.max(0, Date.now() - new Date(isoString).getTime());
   const h = Math.floor(ms / 3_600_000);
   const m = Math.floor((ms % 3_600_000) / 60_000);
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
