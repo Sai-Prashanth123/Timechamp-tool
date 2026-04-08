@@ -51,6 +51,8 @@ func (db *DB) migrate() error {
 			app_name     TEXT NOT NULL,
 			window_title TEXT NOT NULL,
 			url          TEXT NOT NULL DEFAULT '',
+			category     TEXT NOT NULL DEFAULT '',
+			duration_ms  INTEGER NOT NULL DEFAULT 0,
 			started_at   DATETIME NOT NULL,
 			ended_at     DATETIME NOT NULL,
 			synced       INTEGER NOT NULL DEFAULT 0,

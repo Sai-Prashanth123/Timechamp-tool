@@ -17,7 +17,9 @@ import (
 
 	"github.com/timechamp/agent/internal/buffer"
 	"github.com/timechamp/agent/internal/capture"
+	"github.com/timechamp/agent/internal/classifier"
 	"github.com/timechamp/agent/internal/config"
+	"github.com/timechamp/agent/internal/heartbeat"
 	"github.com/timechamp/agent/internal/keychain"
 	"github.com/timechamp/agent/internal/service"
 	"github.com/timechamp/agent/internal/stream"
@@ -31,31 +33,27 @@ var (
 	BuildDate = "unknown"
 )
 
-// urlCache is an atomic string holding the latest URL pushed from the browser
-// extension native host. It is written by the URL listener goroutine and read
-// by the activity loop.
+// urlCache holds the latest URL pushed from the browser extension native host.
 var urlCache atomic.Value // stores string
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
 	log.SetPrefix("[agent] ")
 
-	// When launched by Windows SCM, run in service mode.
 	if service.IsWindowsService() {
 		if err := service.RunAsService(run); err != nil {
 			log.Fatalf("service run failed: %v", err)
 		}
 		return
 	}
-
 	run()
 }
 
 func run() {
 	cfg := config.Load()
-	log.Printf("Time Champ Agent %s (%s)", Version, BuildDate)
+	log.Printf("Time Champ Agent %s (%s) on %s/%s", Version, BuildDate, runtime.GOOS, runtime.GOARCH)
 
-	// Load saved identity (orgID + employeeID) from previous registration.
+	// Load saved identity.
 	identity, err := config.LoadIdentity(cfg.DataDir)
 	if err != nil {
 		log.Printf("Warning: could not load identity: %v", err)
@@ -63,7 +61,7 @@ func run() {
 	cfg.OrgID = identity.OrgID
 	cfg.EmployeeID = identity.EmployeeID
 
-	// Load auth token from OS keychain.
+	// Auth token.
 	token, err := keychain.LoadToken()
 	if err != nil || token == "" {
 		inviteToken := os.Getenv("TC_INVITE_TOKEN")
@@ -78,21 +76,19 @@ func run() {
 		if regErr != nil {
 			log.Fatalf("Registration failed: %v", regErr)
 		}
-
 		if saveErr := keychain.SaveToken(regToken); saveErr != nil {
 			log.Fatalf("Failed to save token: %v", saveErr)
 		}
 		if saveErr := config.SaveIdentity(cfg.DataDir, orgID, employeeID); saveErr != nil {
 			log.Fatalf("Failed to save identity: %v", saveErr)
 		}
-
 		token = regToken
 		cfg.OrgID = orgID
 		cfg.EmployeeID = employeeID
 		log.Printf("Agent registered for org %s employee %s", orgID, employeeID)
 	}
 
-	// Optional TLS certificate pinning (set TC_TLS_PIN env to a SHA-256 hex fingerprint).
+	// Optional TLS certificate pinning.
 	var clientOpts []agentsync.ClientOption
 	if pin := os.Getenv("TC_TLS_PIN"); pin != "" {
 		clientOpts = append(clientOpts, agentsync.WithCertPin(pin))
@@ -110,7 +106,7 @@ func run() {
 
 	screenshotsDir := filepath.Join(cfg.DataDir, "screenshots")
 
-	// Fetch org config (streaming, screenshot interval).
+	// Fetch org config.
 	orgCfg, _ := client.FetchOrgConfig()
 	streamingEnabled := cfg.StreamingEnabled
 	cameraEnabled := cfg.CameraEnabled
@@ -146,11 +142,11 @@ func run() {
 			cfg.StreamingURL, cameraEnabled, audioEnabled, maxStreamFPS)
 	}
 
-	// Start URL listener for browser extension native messaging host.
+	// Browser extension URL relay listener.
 	urlCache.Store("")
 	go listenBrowserURLs()
 
-	// Background auto-update check (once per hour).
+	// Auto-update checker (hourly, skipped in dev builds).
 	if Version != "dev" {
 		go func() {
 			ticker := time.NewTicker(1 * time.Hour)
@@ -168,30 +164,60 @@ func run() {
 		}()
 	}
 
-	log.Printf("Agent started. Screenshot every %ds, sync every %ds",
-		cfg.ScreenshotInterval, cfg.SyncInterval)
+	// ── Heartbeat queue ───────────────────────────────────────────────────────
+	// Window events are pre-merged on the client before being committed to SQLite.
+	// This eliminates fractured 1-second records and stores accurate session
+	// durations — mirrors ActivityWatch's client-side RequestQueue with pre-merge.
+	const (
+		windowStream  = "window"
+		pulsetime     = 2 * time.Second // poll_time(1s) + 1s margin
+		commitThresh  = 60 * time.Second
+	)
 
-	// Tickers.
+	hq := heartbeat.NewQueue(commitThresh, func(e heartbeat.Event) {
+		// Called when a merged event is ready to persist.
+		startedAt := e.Timestamp
+		endedAt := e.Timestamp.Add(e.Duration)
+
+		_ = db.InsertActivity(buffer.ActivityEvent{
+			EmployeeID:  cfg.EmployeeID,
+			OrgID:       cfg.OrgID,
+			AppName:     e.Data["app"],
+			WindowTitle: e.Data["title"],
+			URL:         e.Data["url"],
+			Category:    e.Data["category"],
+			DurationMs:  e.Duration.Milliseconds(),
+			StartedAt:   startedAt,
+			EndedAt:     endedAt,
+		})
+	})
+
+	// ── AFK state machine ─────────────────────────────────────────────────────
+	// Adapted from ActivityWatch aw-watcher-afk state machine.
+	// Tracks exact timestamps of AFK transitions instead of just checking idle.
+	afkThreshold := time.Duration(cfg.IdleThreshold) * time.Second
+	isAFK := false
+
+	log.Printf("Agent started. Screenshot every %ds, sync every %ds, idle threshold %ds",
+		cfg.ScreenshotInterval, cfg.SyncInterval, cfg.IdleThreshold)
+
+	// ── Tickers ────────────────────────────────────────────────────────────────
+	// Window polling at 1 second (matches ActivityWatch aw-watcher-window default).
+	windowTicker    := time.NewTicker(1 * time.Second)
 	screenshotTicker := time.NewTicker(time.Duration(cfg.ScreenshotInterval) * time.Second)
 	syncTicker       := time.NewTicker(time.Duration(cfg.SyncInterval) * time.Second)
-	activityTicker   := time.NewTicker(10 * time.Second)
 	inputTicker      := time.NewTicker(60 * time.Second)
-	metricsTicker    := time.NewTicker(60 * time.Second) // collect metrics every minute
+	metricsTicker    := time.NewTicker(60 * time.Second)
 	pruneTicker      := time.NewTicker(24 * time.Hour)
 
+	defer windowTicker.Stop()
 	defer screenshotTicker.Stop()
 	defer syncTicker.Stop()
-	defer activityTicker.Stop()
 	defer inputTicker.Stop()
 	defer metricsTicker.Stop()
 	defer pruneTicker.Stop()
 
 	inputCounter := &capture.InputCounter{}
-
-	var (
-		currentWindow capture.ActiveWindow
-		windowStarted time.Time
-	)
 
 	// Graceful shutdown.
 	quit := make(chan os.Signal, 1)
@@ -202,17 +228,7 @@ func run() {
 
 		case <-quit:
 			log.Println("Shutdown signal received, flushing buffer...")
-			if currentWindow.AppName != "" {
-				_ = db.InsertActivity(buffer.ActivityEvent{
-					EmployeeID:  cfg.EmployeeID,
-					OrgID:       cfg.OrgID,
-					AppName:     currentWindow.AppName,
-					WindowTitle: currentWindow.WindowTitle,
-					URL:         currentWindow.URL,
-					StartedAt:   windowStarted,
-					EndedAt:     time.Now(),
-				})
-			}
+			hq.FlushAll()
 			_, _ = uploader.FlushActivity()
 			_, _ = uploader.FlushKeystrokes()
 			_, _ = uploader.FlushScreenshots()
@@ -221,56 +237,61 @@ func run() {
 			log.Println("Shutting down agent.")
 			return
 
-		case <-activityTicker.C:
+		// ── Window poll (1 second) ─────────────────────────────────────────────
+		case t := <-windowTicker.C:
+			idleSec, _ := capture.IdleSeconds()
+			idleDur := time.Duration(idleSec) * time.Second
+
+			// ── AFK state machine (ActivityWatch pattern) ────────────────────
+			if !isAFK && idleDur >= afkThreshold {
+				// ACTIVE → AFK transition
+				// Flush current window session immediately on going AFK.
+				hq.FlushAll()
+				isAFK = true
+				log.Printf("[afk] user idle for %s — pausing tracking", idleDur.Round(time.Second))
+			} else if isAFK && idleDur < afkThreshold {
+				// AFK → ACTIVE transition
+				isAFK = false
+				log.Printf("[afk] user returned after %s idle", idleDur.Round(time.Second))
+			}
+
+			if isAFK {
+				continue
+			}
+
+			// ── Window tracking ───────────────────────────────────────────────
 			win, err := capture.GetActiveWindow()
-			if err != nil {
+			if err != nil || win.AppName == "" {
 				continue
 			}
 
 			// Overlay URL from browser extension cache if available.
-			if extURL := urlCache.Load().(string); extURL != "" && win.URL == "" {
-				win.URL = extURL
-			}
-
-			idle, _ := capture.IdleSeconds()
-			if idle >= cfg.IdleThreshold {
-				if currentWindow.AppName != "" {
-					_ = db.InsertActivity(buffer.ActivityEvent{
-						EmployeeID:  cfg.EmployeeID,
-						OrgID:       cfg.OrgID,
-						AppName:     currentWindow.AppName,
-						WindowTitle: currentWindow.WindowTitle,
-						URL:         currentWindow.URL,
-						StartedAt:   windowStarted,
-						EndedAt:     time.Now(),
-					})
-					currentWindow = capture.ActiveWindow{}
+			url := win.URL
+			if url == "" {
+				if extURL := urlCache.Load().(string); extURL != "" {
+					url = extURL
 				}
-				continue
 			}
 
-			if win.AppName != currentWindow.AppName || win.WindowTitle != currentWindow.WindowTitle {
-				if currentWindow.AppName != "" {
-					_ = db.InsertActivity(buffer.ActivityEvent{
-						EmployeeID:  cfg.EmployeeID,
-						OrgID:       cfg.OrgID,
-						AppName:     currentWindow.AppName,
-						WindowTitle: currentWindow.WindowTitle,
-						URL:         currentWindow.URL,
-						StartedAt:   windowStarted,
-						EndedAt:     time.Now(),
-					})
-				}
-				currentWindow = win
-				windowStarted = time.Now()
-			} else if win.URL != "" && win.URL != currentWindow.URL {
-				// URL changed within the same window (in-page navigation).
-				currentWindow.URL = win.URL
-			}
+			// Classify app into a productivity category.
+			cat := classifier.Classify(win.AppName, win.WindowTitle, url, classifier.DefaultRules)
 
+			// Feed into heartbeat queue for pre-merge.
+			hq.Push(windowStream, heartbeat.Event{
+				Timestamp: t,
+				Duration:  1 * time.Second,
+				Data: map[string]string{
+					"app":      win.AppName,
+					"title":    win.WindowTitle,
+					"url":      url,
+					"category": cat,
+				},
+			}, pulsetime)
+
+		// ── Screenshots ────────────────────────────────────────────────────────
 		case <-screenshotTicker.C:
-			idle, _ := capture.IdleSeconds()
-			if idle >= cfg.IdleThreshold {
+			idleSec, _ := capture.IdleSeconds()
+			if time.Duration(idleSec)*time.Second >= afkThreshold {
 				continue
 			}
 
@@ -279,7 +300,6 @@ func run() {
 				log.Printf("Screenshot failed: %v", err)
 				continue
 			}
-
 			_ = db.InsertScreenshot(buffer.ScreenshotRecord{
 				EmployeeID: cfg.EmployeeID,
 				OrgID:      cfg.OrgID,
@@ -287,6 +307,7 @@ func run() {
 				CapturedAt: time.Now(),
 			})
 
+		// ── Input counts ───────────────────────────────────────────────────────
 		case <-inputTicker.C:
 			keys, mouse := inputCounter.Drain()
 			if keys > 0 || mouse > 0 {
@@ -299,10 +320,10 @@ func run() {
 				})
 			}
 
+		// ── System metrics ─────────────────────────────────────────────────────
 		case <-metricsTicker.C:
 			m, err := capture.GetSystemMetrics()
 			if err != nil {
-				log.Printf("Metrics capture error: %v", err)
 				continue
 			}
 			_ = db.InsertMetrics(buffer.SystemMetricsEvent{
@@ -316,13 +337,17 @@ func run() {
 				RecordedAt:      time.Now(),
 			})
 			if m.AgentMemMB > 100 {
-				log.Printf("Warning: agent RAM usage %d MiB exceeds 100 MiB target", m.AgentMemMB)
+				log.Printf("Warning: agent RAM %d MiB — check for memory leak", m.AgentMemMB)
 			}
 
+		// ── Sync flush ─────────────────────────────────────────────────────────
 		case <-syncTicker.C:
 			if !client.IsAvailable() {
 				continue
 			}
+			// Flush heartbeat queue to SQLite first.
+			hq.FlushAll()
+
 			n1, err1 := uploader.FlushActivity()
 			n2, err2 := uploader.FlushKeystrokes()
 			n3, err3 := uploader.FlushScreenshots()
@@ -335,6 +360,7 @@ func run() {
 					n1, n2, n3, n4)
 			}
 
+		// ── Daily prune ────────────────────────────────────────────────────────
 		case <-pruneTicker.C:
 			if err := db.PruneSynced(cfg.MaxBufferDays); err != nil {
 				log.Printf("Prune error: %v", err)
@@ -344,12 +370,10 @@ func run() {
 }
 
 // listenBrowserURLs starts a local TCP listener for the native messaging host.
-// It updates urlCache whenever a URL message arrives.
 func listenBrowserURLs() {
 	ln, err := net.Listen("tcp", "127.0.0.1:27182")
 	if err != nil {
-		// Port may be in use by another agent instance — that's OK.
-		log.Printf("URL listener: %v (browser extension URLs will use native capture)", err)
+		log.Printf("URL listener: %v (browser extension relay disabled)", err)
 		return
 	}
 	defer ln.Close()
@@ -394,8 +418,8 @@ func osVersion() string {
 	return fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)
 }
 
-// updaterPublicKey is the ECDSA-P256 PEM public key used to verify update binaries.
-// Replace with your actual key before shipping production builds.
+// updaterPublicKey is the ECDSA-P256 PEM public key for verifying update binaries.
+// Replace with your actual signing key before production deployment.
 const updaterPublicKey = `-----BEGIN PUBLIC KEY-----
-MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEPLACE_HOLDER_REPLACE_WITH_REAL_KEY==
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEPLACEHOLDERREPLACEWITHREALKEY==
 -----END PUBLIC KEY-----`

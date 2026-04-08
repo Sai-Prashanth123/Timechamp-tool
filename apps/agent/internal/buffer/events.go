@@ -12,6 +12,8 @@ type ActivityEvent struct {
 	AppName     string
 	WindowTitle string
 	URL         string
+	Category    string        // e.g. "Work.Development", "Leisure.Video"
+	DurationMs  int64         // Accurate duration from heartbeat merge (ms)
 	StartedAt   time.Time
 	EndedAt     time.Time
 	Synced      bool
@@ -42,9 +44,11 @@ type KeystrokeEvent struct {
 // InsertActivity stores an activity event in the local buffer.
 func (db *DB) InsertActivity(e ActivityEvent) error {
 	_, err := db.conn.Exec(
-		`INSERT INTO activity_events (employee_id, org_id, app_name, window_title, url, started_at, ended_at, synced)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO activity_events
+		 (employee_id, org_id, app_name, window_title, url, category, duration_ms, started_at, ended_at, synced)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		e.EmployeeID, e.OrgID, e.AppName, e.WindowTitle, e.URL,
+		e.Category, e.DurationMs,
 		e.StartedAt.UTC(), e.EndedAt.UTC(), boolToInt(e.Synced),
 	)
 	return err
@@ -53,7 +57,7 @@ func (db *DB) InsertActivity(e ActivityEvent) error {
 // ListUnsyncedActivity returns up to limit unsynced activity events.
 func (db *DB) ListUnsyncedActivity(limit int) ([]ActivityEvent, error) {
 	rows, err := db.conn.Query(
-		`SELECT id, employee_id, org_id, app_name, window_title, url, started_at, ended_at
+		`SELECT id, employee_id, org_id, app_name, window_title, url, category, duration_ms, started_at, ended_at
 		 FROM activity_events WHERE synced = 0 ORDER BY id ASC LIMIT ?`, limit,
 	)
 	if err != nil {
@@ -64,7 +68,8 @@ func (db *DB) ListUnsyncedActivity(limit int) ([]ActivityEvent, error) {
 	var events []ActivityEvent
 	for rows.Next() {
 		var e ActivityEvent
-		if err := rows.Scan(&e.ID, &e.EmployeeID, &e.OrgID, &e.AppName, &e.WindowTitle, &e.URL, &e.StartedAt, &e.EndedAt); err != nil {
+		if err := rows.Scan(&e.ID, &e.EmployeeID, &e.OrgID, &e.AppName, &e.WindowTitle,
+			&e.URL, &e.Category, &e.DurationMs, &e.StartedAt, &e.EndedAt); err != nil {
 			return nil, err
 		}
 		events = append(events, e)

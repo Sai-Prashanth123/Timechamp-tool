@@ -6,8 +6,6 @@ import (
 	"strings"
 	"syscall"
 	"unsafe"
-
-	"golang.org/x/sys/windows"
 )
 
 // knownBrowsers maps lowercase exe names to display names.
@@ -29,12 +27,8 @@ var omniboxClasses = []string{
 	"Edit",                  // IE / generic
 }
 
-var (
-	enumChildWindowsProc = user32.NewProc("EnumChildWindows")
-	getClassNameProc     = user32.NewProc("GetClassNameW")
-	sendMessageProc      = user32.NewProc("SendMessageW")
-	isWindowVisibleProc  = user32.NewProc("IsWindowVisible")
-)
+// (enumChildWindowsProc, getClassNameProc, sendMessageProc, isWindowVisibleProc
+//  are declared in windows_api.go)
 
 const (
 	wmGetText       = 0x000D
@@ -168,5 +162,3 @@ func normalizeURL(s string) string {
 	return s
 }
 
-// ensure windows import is used
-var _ = windows.Handle(0)

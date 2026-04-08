@@ -50,6 +50,8 @@ type ActivityEventDTO struct {
 	AppName     string    `json:"appName"`
 	WindowTitle string    `json:"windowTitle"`
 	URL         string    `json:"url"`
+	Category    string    `json:"category"`
+	DurationMs  int64     `json:"durationMs"`
 	StartedAt   time.Time `json:"startedAt"`
 	EndedAt     time.Time `json:"endedAt"`
 }
@@ -92,6 +94,8 @@ func (u *Uploader) FlushActivity() (int, error) {
 			AppName:     e.AppName,
 			WindowTitle: e.WindowTitle,
 			URL:         e.URL,
+			Category:    e.Category,
+			DurationMs:  e.DurationMs,
 			StartedAt:   e.StartedAt,
 			EndedAt:     e.EndedAt,
 		})

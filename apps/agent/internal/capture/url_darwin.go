@@ -8,6 +8,7 @@ import (
 )
 
 // knownBrowserApps maps macOS application names to their AppleScript target name.
+// This is the fallback path when JXA is unavailable.
 var knownBrowserApps = map[string]string{
 	"google chrome":  "Google Chrome",
 	"chrome":         "Google Chrome",
@@ -19,10 +20,12 @@ var knownBrowserApps = map[string]string{
 	"opera":          "Opera",
 	"vivaldi":        "Vivaldi",
 	"arc":            "Arc",
+	"chromium":       "Chromium",
 }
 
-// getBrowserURL extracts the current URL from the frontmost browser window using
-// AppleScript. appName is the macOS application name as returned by System Events.
+// getBrowserURL extracts the current URL from the frontmost browser window.
+// On macOS this is the AppleScript fallback; primary URL extraction happens in
+// getActiveWindow() via the JXA script.
 func getBrowserURL(appName string) string {
 	lower := strings.ToLower(strings.TrimSpace(appName))
 	target, ok := knownBrowserApps[lower]
@@ -34,11 +37,10 @@ func getBrowserURL(appName string) string {
 	switch target {
 	case "Safari":
 		script = `tell application "Safari" to get URL of current tab of front window`
-	case "Firefox":
-		// Firefox doesn't expose URL via standard AppleScript; use window title fallback.
-		return firefoxURLFromTitle()
+	case "Firefox", "Firefox Developer Edition", "Firefox Nightly":
+		return "" // Firefox URL requires JXA or browser extension
 	default:
-		// Chromium-based browsers (Chrome, Edge, Brave, Opera, Vivaldi, Arc)
+		// Chromium-based
 		script = `tell application "` + target + `" to get URL of active tab of first window`
 	}
 
@@ -49,33 +51,6 @@ func getBrowserURL(appName string) string {
 	url := strings.TrimSpace(string(out))
 	if looksLikeURL(url) {
 		return url
-	}
-	return ""
-}
-
-// firefoxURLFromTitle reads the Firefox window title and tries to extract a URL.
-// Firefox on macOS shows "<Page Title> — Mozilla Firefox" in the title bar.
-func firefoxURLFromTitle() string {
-	script := `tell application "System Events"
-		set frontApp to first application process whose name is "firefox"
-		if (count of frontApp) > 0 then
-			return name of first window of frontApp
-		end if
-		return ""
-	end tell`
-
-	out, err := exec.Command("osascript", "-e", script).Output()
-	if err != nil {
-		return ""
-	}
-	title := strings.TrimSpace(string(out))
-	for _, suffix := range []string{" — Mozilla Firefox", " - Mozilla Firefox", " – Mozilla Firefox"} {
-		if idx := strings.LastIndex(title, suffix); idx > 0 {
-			candidate := title[:idx]
-			if looksLikeURL(candidate) {
-				return candidate
-			}
-		}
 	}
 	return ""
 }
