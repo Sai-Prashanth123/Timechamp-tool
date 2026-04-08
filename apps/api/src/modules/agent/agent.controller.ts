@@ -81,4 +81,12 @@ export class AgentController {
       maxStreamFps: org.maxStreamFps,
     };
   }
+
+  @Post('heartbeat')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Update agent last_seen_at' })
+  async heartbeat(@AgentCurrentUser() user: User) {
+    await this.service.recordHeartbeat(user);
+    return { ok: true };
+  }
 }

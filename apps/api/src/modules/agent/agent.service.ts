@@ -1,4 +1,4 @@
-import { Injectable, ServiceUnavailableException, UnauthorizedException, Optional, Inject, Logger } from '@nestjs/common';
+import { Injectable, ServiceUnavailableException, UnauthorizedException, Optional, Inject, Logger, forwardRef } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -15,6 +15,7 @@ import { SyncActivityDto } from './dto/sync-activity.dto';
 import { SyncScreenshotDto } from './dto/sync-screenshot.dto';
 import { SyncGpsDto } from './dto/sync-gps.dto';
 import { RegisterAgentDto } from './dto/register-agent.dto';
+import { MonitoringGateway } from '../monitoring/monitoring.gateway';
 
 @Injectable()
 export class AgentService {
@@ -38,6 +39,8 @@ export class AgentService {
     @InjectRepository(AgentDevice)
     private deviceRepo: Repository<AgentDevice>,
     @Optional() @Inject('TOKEN_SERVICE') private tokenService: any,
+    @Optional() @Inject(forwardRef(() => MonitoringGateway))
+    private monitoringGateway: MonitoringGateway | undefined,
   ) {
     // Determine storage provider from env vars
     const b2Bucket = this.config.get<string>('B2_BUCKET');
@@ -81,6 +84,15 @@ export class AgentService {
       }),
     );
     await this.activityRepo.save(entities);
+    if (entities.length > 0) {
+      const latest = entities[entities.length - 1];
+      this.monitoringGateway?.emitActivityUpdate(user.organizationId, {
+        userId: user.id,
+        appName: latest.appName,
+        windowTitle: latest.windowTitle ?? null,
+        timestamp: latest.startedAt,
+      });
+    }
     return entities.length;
   }
 
@@ -111,7 +123,13 @@ export class AgentService {
       capturedAt: new Date(dto.capturedAt),
       fileSizeBytes: dto.fileSizeBytes,
     });
-    return this.screenshotRepo.save(entity);
+    const saved = await this.screenshotRepo.save(entity);
+    this.monitoringGateway?.emitScreenshotTaken(user.organizationId, {
+      userId: user.id,
+      screenshotId: saved.id,
+      capturedAt: saved.capturedAt,
+    });
+    return saved;
   }
 
   async getPresignedDownloadUrl(s3Key: string): Promise<string> {
@@ -206,6 +224,11 @@ export class AgentService {
       { userId: user.id, isActive: true },
       { lastSeenAt: new Date() },
     );
+    this.monitoringGateway?.emitEmployeeStatus(user.organizationId, {
+      userId: user.id,
+      status: 'online',
+      lastSeen: new Date(),
+    });
   }
 
   async findDeviceByToken(token: string): Promise<AgentDevice | null> {

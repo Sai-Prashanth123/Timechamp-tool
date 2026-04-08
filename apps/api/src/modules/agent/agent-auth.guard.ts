@@ -1,40 +1,39 @@
 import {
-  CanActivate,
-  ExecutionContext,
-  Injectable,
-  UnauthorizedException,
+  Injectable, CanActivate, ExecutionContext, UnauthorizedException,
+  Inject, forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from '../../database/entities/user.entity';
+import { AgentService } from './agent.service';
 
 @Injectable()
 export class AgentAuthGuard implements CanActivate {
   constructor(
+    @Inject(forwardRef(() => AgentService))
+    private agentService: AgentService,
     @InjectRepository(User)
     private userRepo: Repository<User>,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const req = context.switchToHttp().getRequest();
-    const auth: string | undefined = req.headers['authorization'];
-    if (!auth?.startsWith('Bearer ')) {
-      throw new UnauthorizedException('Missing agent token');
-    }
-    const token = auth.slice(7);
+    const request = context.switchToHttp().getRequest();
 
-    // agent_token has select: false so we must explicitly select it
-    const user = await this.userRepo
-      .createQueryBuilder('user')
-      .addSelect('user.agentToken')
-      .where('user.agentToken = :token AND user.isActive = true', { token })
-      .getOne();
+    const authHeader: string | undefined = request.headers['authorization'];
+    const xDeviceToken: string | undefined = request.headers['x-device-token'];
+    const raw = authHeader?.startsWith('Bearer ')
+      ? authHeader.slice(7)
+      : xDeviceToken;
 
-    if (!user) {
-      throw new UnauthorizedException('Invalid agent token');
-    }
+    if (!raw) throw new UnauthorizedException('No device token provided');
 
-    req.agentUser = user;
+    const device = await this.agentService.findDeviceByToken(raw);
+    if (!device) throw new UnauthorizedException('Invalid or expired device token');
+
+    const user = await this.userRepo.findOne({ where: { id: device.userId } });
+    if (!user || !user.isActive) throw new UnauthorizedException('User not found or inactive');
+
+    request.agentUser = user;
     return true;
   }
 }
