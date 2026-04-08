@@ -292,3 +292,110 @@ describe('TimeTrackingService', () => {
     });
   });
 });
+
+// ── New TDD tests for getTeamTimesheets and getPayrollReport ─────────────
+
+const mockTimesheetRepo2 = {
+  find: jest.fn(),
+  findOne: jest.fn(),
+  create: jest.fn(),
+  save: jest.fn(),
+  update: jest.fn(),
+};
+const mockAttendanceRepo2 = { find: jest.fn(), findOne: jest.fn(), save: jest.fn(), create: jest.fn() };
+const mockEntryRepo2 = { find: jest.fn(), findOne: jest.fn(), save: jest.fn(), create: jest.fn(), delete: jest.fn() };
+
+const orgId = 'org-uuid';
+const userId1 = 'user-1';
+const userId2 = 'user-2';
+
+const mockTimesheets: Partial<Timesheet>[] = [
+  {
+    id: 'ts-1', userId: userId1, organizationId: orgId,
+    weekStart: '2026-03-30', totalMinutes: 2400,
+    status: TimesheetStatus.SUBMITTED, submittedAt: new Date(),
+    approvedBy: null, approvedAt: null, rejectionNote: null,
+    user: { id: userId1, firstName: 'Alice', lastName: 'Jones' } as any,
+  },
+  {
+    id: 'ts-2', userId: userId2, organizationId: orgId,
+    weekStart: '2026-03-30', totalMinutes: 1800,
+    status: TimesheetStatus.APPROVED, submittedAt: new Date(),
+    approvedBy: 'admin-id', approvedAt: new Date(), rejectionNote: null,
+    user: { id: userId2, firstName: 'Bob', lastName: 'Smith' } as any,
+  },
+];
+
+describe('TimeTrackingService.getTeamTimesheets', () => {
+  let service: TimeTrackingService;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        TimeTrackingService,
+        { provide: getRepositoryToken(Timesheet), useValue: mockTimesheetRepo2 },
+        { provide: getRepositoryToken(Attendance), useValue: mockAttendanceRepo2 },
+        { provide: getRepositoryToken(TimeEntry), useValue: mockEntryRepo2 },
+      ],
+    }).compile();
+    service = module.get<TimeTrackingService>(TimeTrackingService);
+    jest.clearAllMocks();
+  });
+
+  it('returns all timesheets for the org', async () => {
+    mockTimesheetRepo2.find.mockResolvedValue(mockTimesheets);
+    const result = await service.getTeamTimesheets(orgId, {});
+    expect(result).toHaveLength(2);
+    expect(mockTimesheetRepo2.find).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ organizationId: orgId }) }),
+    );
+  });
+
+  it('filters by weekStart when provided', async () => {
+    mockTimesheetRepo2.find.mockResolvedValue([mockTimesheets[0]]);
+    const result = await service.getTeamTimesheets(orgId, { weekStart: '2026-03-30' });
+    expect(result).toHaveLength(1);
+    expect(mockTimesheetRepo2.find).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ weekStart: '2026-03-30' }) }),
+    );
+  });
+
+  it('filters by status when provided', async () => {
+    mockTimesheetRepo2.find.mockResolvedValue([mockTimesheets[0]]);
+    await service.getTeamTimesheets(orgId, { status: 'submitted' });
+    expect(mockTimesheetRepo2.find).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ status: TimesheetStatus.SUBMITTED }) }),
+    );
+  });
+});
+
+describe('TimeTrackingService.getPayrollReport', () => {
+  let service: TimeTrackingService;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        TimeTrackingService,
+        { provide: getRepositoryToken(Timesheet), useValue: mockTimesheetRepo2 },
+        { provide: getRepositoryToken(Attendance), useValue: mockAttendanceRepo2 },
+        { provide: getRepositoryToken(TimeEntry), useValue: mockEntryRepo2 },
+      ],
+    }).compile();
+    service = module.get<TimeTrackingService>(TimeTrackingService);
+    jest.clearAllMocks();
+  });
+
+  it('returns payroll rows for approved timesheets', async () => {
+    mockTimesheetRepo2.find.mockResolvedValue([mockTimesheets[1]]);
+    const result = await service.getPayrollReport(orgId, '2026-03-30', '2026-04-05');
+    expect(result).toHaveLength(1);
+    expect(result[0].totalMinutes).toBe(1800);
+    expect(result[0].userId).toBe(userId2);
+  });
+
+  it('returns empty array when no approved timesheets', async () => {
+    mockTimesheetRepo2.find.mockResolvedValue([]);
+    const result = await service.getPayrollReport(orgId, '2026-03-30', '2026-04-05');
+    expect(result).toHaveLength(0);
+  });
+});
