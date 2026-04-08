@@ -6,6 +6,71 @@ import { Attendance } from '../../database/entities/attendance.entity';
 import { TimeEntry } from '../../database/entities/time-entry.entity';
 import { RedisService } from '../../infrastructure/redis/redis.service';
 
+// ── Shared mocks for new SP7 tests ────────────────────────────────────────────
+const sp7ActivityRepo = { find: jest.fn(), createQueryBuilder: jest.fn() };
+const sp7AttendanceRepo = { find: jest.fn() };
+const sp7TimeEntryRepo = { find: jest.fn() };
+const sp7Redis = { get: jest.fn().mockResolvedValue(null), set: jest.fn().mockResolvedValue(undefined), del: jest.fn() };
+
+async function buildSp7Module(): Promise<AnalyticsService> {
+  const module: TestingModule = await Test.createTestingModule({
+    providers: [
+      AnalyticsService,
+      { provide: getRepositoryToken(ActivityEvent), useValue: sp7ActivityRepo },
+      { provide: getRepositoryToken(Attendance), useValue: sp7AttendanceRepo },
+      { provide: getRepositoryToken(TimeEntry), useValue: sp7TimeEntryRepo },
+      { provide: RedisService, useValue: sp7Redis },
+    ],
+  }).compile();
+  return module.get<AnalyticsService>(AnalyticsService);
+}
+
+describe('AnalyticsService.categorizeApp', () => {
+  let service: AnalyticsService;
+
+  beforeEach(async () => {
+    service = await buildSp7Module();
+  });
+
+  it('categorizes VS Code as productive', () => {
+    expect(service.categorizeApp('Code.exe')).toBe('productive');
+  });
+  it('categorizes YouTube as unproductive', () => {
+    expect(service.categorizeApp('YouTube')).toBe('unproductive');
+  });
+  it('categorizes unknown app as neutral', () => {
+    expect(service.categorizeApp('SomeRandomApp')).toBe('neutral');
+  });
+});
+
+describe('AnalyticsService.getProductivityReport', () => {
+  let service: AnalyticsService;
+
+  beforeEach(async () => {
+    service = await buildSp7Module();
+    jest.clearAllMocks();
+    sp7Redis.get.mockResolvedValue(null);
+    sp7Redis.set.mockResolvedValue(undefined);
+  });
+
+  it('returns empty array when no activities', async () => {
+    sp7ActivityRepo.find.mockResolvedValue([]);
+    const result = await service.getProductivityReport('org1', undefined, '2026-04-01', '2026-04-07');
+    expect(result).toEqual([]);
+  });
+
+  it('aggregates activities by date with correct categories', async () => {
+    sp7ActivityRepo.find.mockResolvedValue([
+      { userId: 'u1', appName: 'Code.exe', durationSec: 3600, startedAt: new Date('2026-04-01T10:00:00Z') },
+      { userId: 'u1', appName: 'YouTube', durationSec: 1800, startedAt: new Date('2026-04-01T12:00:00Z') },
+    ]);
+    const result = await service.getProductivityReport('org1', 'u1', '2026-04-01', '2026-04-01');
+    expect(result).toHaveLength(1);
+    expect(result[0].productiveMinutes).toBe(60); // 3600s = 60 min
+    expect(result[0].unproductiveMinutes).toBe(30); // 1800s = 30 min
+  });
+});
+
 type MockRepo = { find: jest.Mock };
 function mockRepo(): MockRepo {
   return { find: jest.fn() };
