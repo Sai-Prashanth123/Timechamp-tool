@@ -1,5 +1,6 @@
 import { Sidebar } from '@/components/dashboard/sidebar';
 import { EmailVerificationBanner } from '@/components/dashboard/email-verification-banner';
+import { LayoutClient } from './layout-client';
 
 export default function DashboardLayout({
   children,
@@ -11,7 +12,7 @@ export default function DashboardLayout({
       <Sidebar />
       <main className="flex-1 flex flex-col overflow-hidden min-w-0">
         <EmailVerificationBanner />
-        {children}
+        <LayoutClient>{children}</LayoutClient>
       </main>
     </div>
   );
