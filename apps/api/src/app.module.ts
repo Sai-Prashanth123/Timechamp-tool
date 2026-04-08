@@ -65,6 +65,12 @@ import { StreamingModule } from './modules/streaming/streaming.module';
         WS_CORS_ORIGIN: Joi.string().optional(),
         DAILY_BW_CAP_MB: Joi.number().default(500),
         SESSION_MAX_HOURS: Joi.number().default(8),
+        SMTP_HOST: Joi.string().optional(),
+        SMTP_PORT: Joi.number().default(587),
+        SMTP_SECURE: Joi.boolean().default(false),
+        SMTP_USER: Joi.string().optional(),
+        SMTP_PASS: Joi.string().optional(),
+        SMTP_FROM: Joi.string().optional(),
       }),
     }),
     TypeOrmModule.forRootAsync({
