@@ -1,20 +1,25 @@
-import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable, ServiceUnavailableException, UnauthorizedException, Optional, Inject, Logger, forwardRef } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { randomUUID } from 'crypto';
 import { ActivityEvent } from '../../database/entities/activity-event.entity';
 import { Screenshot } from '../../database/entities/screenshot.entity';
 import { GpsLocation } from '../../database/entities/gps-location.entity';
 import { User } from '../../database/entities/user.entity';
 import { Organization } from '../../database/entities/organization.entity';
+import { AgentDevice } from '../../database/entities/agent-device.entity';
 import { SyncActivityDto } from './dto/sync-activity.dto';
 import { SyncScreenshotDto } from './dto/sync-screenshot.dto';
 import { SyncGpsDto } from './dto/sync-gps.dto';
+import { RegisterAgentDto } from './dto/register-agent.dto';
+import { MonitoringGateway } from '../monitoring/monitoring.gateway';
 
 @Injectable()
 export class AgentService {
+  private readonly logger = new Logger(AgentService.name);
   private s3: S3Client | null = null;
   private bucket: string | null = null;
   private cdnUrl: string | null = null;
@@ -29,6 +34,13 @@ export class AgentService {
     private gpsLocationRepo: Repository<GpsLocation>,
     @InjectRepository(Organization)
     private orgRepo: Repository<Organization>,
+    @InjectRepository(User)
+    private userRepo: Repository<User>,
+    @InjectRepository(AgentDevice)
+    private deviceRepo: Repository<AgentDevice>,
+    @Optional() @Inject('TOKEN_SERVICE') private tokenService: any,
+    @Optional() @Inject(forwardRef(() => MonitoringGateway))
+    private monitoringGateway: MonitoringGateway | undefined,
   ) {
     // Determine storage provider from env vars
     const b2Bucket = this.config.get<string>('B2_BUCKET');
@@ -72,6 +84,15 @@ export class AgentService {
       }),
     );
     await this.activityRepo.save(entities);
+    if (entities.length > 0) {
+      const latest = entities[entities.length - 1];
+      this.monitoringGateway?.emitActivityUpdate(user.organizationId, {
+        userId: user.id,
+        appName: latest.appName,
+        windowTitle: latest.windowTitle ?? null,
+        timestamp: latest.startedAt,
+      });
+    }
     return entities.length;
   }
 
@@ -102,7 +123,13 @@ export class AgentService {
       capturedAt: new Date(dto.capturedAt),
       fileSizeBytes: dto.fileSizeBytes,
     });
-    return this.screenshotRepo.save(entity);
+    const saved = await this.screenshotRepo.save(entity);
+    this.monitoringGateway?.emitScreenshotTaken(user.organizationId, {
+      userId: user.id,
+      screenshotId: saved.id,
+      capturedAt: saved.capturedAt,
+    });
+    return saved;
   }
 
   async getPresignedDownloadUrl(s3Key: string): Promise<string> {
@@ -155,5 +182,56 @@ export class AgentService {
     if (!this.s3 || !this.bucket) return;
     const { DeleteObjectCommand } = await import('@aws-sdk/client-s3');
     await this.s3.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }));
+  }
+
+  async registerAgent(dto: RegisterAgentDto): Promise<{
+    agentToken: string;
+    employeeId: string;
+    orgId: string;
+  }> {
+    // Validate invite token
+    let userId: string | null = null;
+    if (this.tokenService) {
+      userId = await this.tokenService.peek('invite', dto.inviteToken);
+    }
+    if (!userId) {
+      throw new UnauthorizedException('Invalid or expired invite token');
+    }
+
+    const user = await this.userRepo.findOne({ where: { id: userId } });
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException('User not found or inactive');
+    }
+
+    const deviceToken = randomUUID();
+    const device = this.deviceRepo.create({
+      organizationId: user.organizationId,
+      userId: user.id,
+      deviceToken,
+      hostname: dto.hostname ?? null,
+      platform: dto.os ?? null,
+      agentVersion: dto.agentVersion ?? null,
+      lastSeenAt: new Date(),
+    });
+    await this.deviceRepo.save(device);
+
+    this.logger.log(`Agent registered: user=${user.id} org=${user.organizationId} host=${dto.hostname}`);
+    return { agentToken: deviceToken, employeeId: user.id, orgId: user.organizationId };
+  }
+
+  async recordHeartbeat(user: User): Promise<void> {
+    await this.deviceRepo.update(
+      { userId: user.id, isActive: true },
+      { lastSeenAt: new Date() },
+    );
+    this.monitoringGateway?.emitEmployeeStatus(user.organizationId, {
+      userId: user.id,
+      status: 'online',
+      lastSeen: new Date(),
+    });
+  }
+
+  async findDeviceByToken(token: string): Promise<AgentDevice | null> {
+    return this.deviceRepo.findOne({ where: { deviceToken: token, isActive: true } });
   }
 }
