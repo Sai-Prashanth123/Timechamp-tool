@@ -4,6 +4,8 @@ import {
   Query,
   UseGuards,
   Res,
+  DefaultValuePipe,
+  ParseIntPipe,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -15,6 +17,7 @@ import { Response } from 'express';
 import { AnalyticsService } from './analytics.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
+import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { User, UserRole } from '../../database/entities/user.entity';
 
@@ -93,5 +96,50 @@ export class AnalyticsController {
       `attachment; filename="time-entries-${from_}-${to_}.csv"`,
     );
     res.send(csv);
+  }
+
+  // GET /analytics/productivity/report?from=YYYY-MM-DD&to=YYYY-MM-DD&userId=optional
+  @Get('productivity/report')
+  @ApiOperation({ summary: 'Daily productivity breakdown per user' })
+  @ApiQuery({ name: 'from', required: true })
+  @ApiQuery({ name: 'to', required: true })
+  @ApiQuery({ name: 'userId', required: false })
+  async getProductivityReport(
+    @CurrentUser() user: User,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('userId') userId?: string,
+  ) {
+    // Employees see only their own data
+    const targetUserId = user.role === 'employee' ? user.id : (userId ?? user.id);
+    return this.service.getProductivityReport(user.organizationId, targetUserId, from, to);
+  }
+
+  // GET /analytics/productivity/summary?from=&to= (manager/admin only)
+  @Get('productivity/summary')
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @ApiOperation({ summary: 'Org-wide productivity summary per employee' })
+  @ApiQuery({ name: 'from', required: true })
+  @ApiQuery({ name: 'to', required: true })
+  async getOrgProductivitySummary(
+    @CurrentUser() user: User,
+    @Query('from') from: string,
+    @Query('to') to: string,
+  ) {
+    return this.service.getOrgProductivitySummary(user.organizationId, from, to);
+  }
+
+  // GET /analytics/productivity/heatmap?weeks=8&userId=optional
+  @Get('productivity/heatmap')
+  @ApiOperation({ summary: 'Calendar heatmap of productive minutes' })
+  @ApiQuery({ name: 'weeks', required: false })
+  @ApiQuery({ name: 'userId', required: false })
+  async getProductivityHeatmap(
+    @CurrentUser() user: User,
+    @Query('weeks', new DefaultValuePipe(8), ParseIntPipe) weeks: number,
+    @Query('userId') userId?: string,
+  ) {
+    const targetUserId = user.role === 'employee' ? user.id : userId;
+    return this.service.getProductivityHeatmap(user.organizationId, targetUserId, weeks);
   }
 }
