@@ -294,4 +294,62 @@ export class TimeTrackingService {
       order: { clockIn: 'ASC' },
     });
   }
+
+  // ── Team timesheets (manager/admin) ───────────────────────────────────
+
+  async getTeamTimesheets(
+    organizationId: string,
+    query: { weekStart?: string; status?: string },
+  ): Promise<Timesheet[]> {
+    const where: any = { organizationId };
+    if (query.weekStart) where.weekStart = query.weekStart;
+    if (query.status) where.status = query.status as TimesheetStatus;
+
+    return this.timesheetRepo.find({
+      where,
+      relations: ['user'],
+      order: { weekStart: 'DESC', createdAt: 'DESC' },
+      take: 500,
+    });
+  }
+
+  // ── Payroll report (admin) ────────────────────────────────────────────
+
+  async getPayrollReport(
+    organizationId: string,
+    from: string,
+    to: string,
+  ): Promise<Array<{
+    userId: string;
+    firstName: string;
+    lastName: string;
+    weekStart: string;
+    totalMinutes: number;
+    overtimeMinutes: number;
+    status: TimesheetStatus;
+  }>> {
+    const timesheets = await this.timesheetRepo.find({
+      where: {
+        organizationId,
+        status: TimesheetStatus.APPROVED,
+        weekStart: Between(from, to),
+      },
+      relations: ['user'],
+      order: { weekStart: 'ASC' },
+    });
+
+    return timesheets.map((ts) => {
+      const regularMinutes = Math.min(ts.totalMinutes, 8 * 5 * 60);
+      const overtimeMinutes = Math.max(0, ts.totalMinutes - regularMinutes);
+      return {
+        userId: ts.userId,
+        firstName: ts.user?.firstName ?? '',
+        lastName: ts.user?.lastName ?? '',
+        weekStart: ts.weekStart,
+        totalMinutes: ts.totalMinutes,
+        overtimeMinutes,
+        status: ts.status,
+      };
+    });
+  }
 }
