@@ -7,6 +7,7 @@ require (
 	github.com/zalando/go-keyring v0.2.3
 	golang.org/x/sys v0.18.0
 	modernc.org/sqlite v1.29.1
+	nhooyr.io/websocket v1.8.11
 )
 
 require (
@@ -28,5 +29,4 @@ require (
 	modernc.org/memory v1.7.2 // indirect
 	modernc.org/strutil v1.2.0 // indirect
 	modernc.org/token v1.1.0 // indirect
-	nhooyr.io/websocket v1.8.11 // indirect
 )
