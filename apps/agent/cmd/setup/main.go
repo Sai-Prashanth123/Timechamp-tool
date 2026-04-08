@@ -37,7 +37,7 @@ func main() {
 	}
 
 	// ── Step 2: Invite Token ──────────────────────────────────────────────────
-	token, err := zenity.Password(
+	_, token, err := zenity.Password(
 		zenity.Title("TimeChamp Agent Setup — Step 2 of 2"),
 		zenity.Attach(0),
 	)
