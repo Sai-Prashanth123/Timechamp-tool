@@ -6,6 +6,7 @@ import {
   Body,
   Param,
   Query,
+  Res,
   UseGuards,
   ParseUUIDPipe,
   HttpCode,
@@ -147,6 +148,59 @@ export class TimeTrackingController {
   }
 
   // ── Team view (manager/admin) ────────────────────────────────────────
+
+  @Get('team/timesheets')
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @ApiOperation({ summary: 'All team timesheets for org (manager/admin)' })
+  @ApiQuery({ name: 'weekStart', required: false, description: 'YYYY-MM-DD Monday' })
+  @ApiQuery({ name: 'status', required: false, enum: ['draft', 'submitted', 'approved', 'rejected'] })
+  getTeamTimesheets(
+    @CurrentUser() user: User,
+    @Query() query: { weekStart?: string; status?: string },
+  ) {
+    return this.service.getTeamTimesheets(user.organizationId, query);
+  }
+
+  @Get('report')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Payroll summary for approved timesheets in date range' })
+  @ApiQuery({ name: 'from', required: true, description: 'YYYY-MM-DD' })
+  @ApiQuery({ name: 'to', required: true, description: 'YYYY-MM-DD' })
+  getPayrollReport(
+    @CurrentUser() user: User,
+    @Query('from') from: string,
+    @Query('to') to: string,
+  ) {
+    return this.service.getPayrollReport(user.organizationId, from, to);
+  }
+
+  @Get('export')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Download approved timesheets as CSV' })
+  @ApiQuery({ name: 'from', required: true })
+  @ApiQuery({ name: 'to', required: true })
+  async exportPayrollCsv(
+    @CurrentUser() user: User,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Res({ passthrough: true }) res: import('express').Response,
+  ): Promise<string> {
+    const rows = await this.service.getPayrollReport(user.organizationId, from, to);
+    const header = 'Employee,Week Start,Total Hours,Overtime Hours,Status';
+    const lines = rows.map((r) =>
+      [
+        `"${r.firstName} ${r.lastName}"`,
+        r.weekStart,
+        (r.totalMinutes / 60).toFixed(2),
+        (r.overtimeMinutes / 60).toFixed(2),
+        r.status,
+      ].join(','),
+    );
+    const csv = [header, ...lines].join('\n');
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="payroll-${from}-${to}.csv"`);
+    return csv;
+  }
 
   @Get('team/status')
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
