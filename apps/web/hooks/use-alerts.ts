@@ -1,18 +1,27 @@
+// apps/web/hooks/use-alerts.ts
+'use client';
+
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '@/lib/api';
 import { toast } from 'sonner';
 
 // ── Types ──────────────────────────────────────────────────────────────
 
-export type AlertMetric = 'idle_time' | 'no_activity' | 'late_clock_in' | 'missed_clock_in';
+export type AlertType =
+  | 'idle_too_long'
+  | 'overtime'
+  | 'late_clock_in'
+  | 'productivity_below';
 
 export type AlertRule = {
   id: string;
   organizationId: string;
   name: string;
-  metric: AlertMetric;
-  thresholdMinutes: number;
-  isActive: boolean;
+  type: AlertType;
+  threshold: number;
+  enabled: boolean;
+  notifyEmail: boolean;
+  notifyInApp: boolean;
   createdAt: string;
   updatedAt: string;
 };
@@ -22,28 +31,47 @@ export type AlertEvent = {
   organizationId: string;
   ruleId: string | null;
   userId: string;
-  metric: AlertMetric;
-  valueMinutes: number;
-  thresholdMinutes: number;
+  type: AlertType | null;
+  message: string | null;
+  seenAt: string | null;
   triggeredAt: string;
-  acknowledgedAt: string | null;
-  acknowledgedBy: string | null;
   createdAt: string;
+  rule?: AlertRule | null;
 };
 
 export type CreateAlertRulePayload = {
   name: string;
-  metric: AlertMetric;
-  thresholdMinutes?: number;
-  isActive?: boolean;
+  type: AlertType;
+  threshold?: number;
+  enabled?: boolean;
+  notifyEmail?: boolean;
+  notifyInApp?: boolean;
 };
 
-export type UpdateAlertRulePayload = {
-  name?: string;
-  metric?: AlertMetric;
-  thresholdMinutes?: number;
-  isActive?: boolean;
+export type UpdateAlertRulePayload = Partial<CreateAlertRulePayload> & { id: string };
+
+// ── Label maps ─────────────────────────────────────────────────────────
+
+export const ALERT_TYPE_LABELS: Record<AlertType, string> = {
+  idle_too_long:        'Idle Too Long',
+  overtime:             'Overtime',
+  late_clock_in:        'Late Clock-In',
+  productivity_below:   'Low Productivity',
 };
+
+export const ALERT_TYPE_ICONS: Record<AlertType, string> = {
+  idle_too_long:        '💤',
+  overtime:             '⏰',
+  late_clock_in:        '🕐',
+  productivity_below:   '📉',
+};
+
+export const ALERT_TYPES: AlertType[] = [
+  'idle_too_long',
+  'overtime',
+  'late_clock_in',
+  'productivity_below',
+];
 
 // ── Alert Rules ────────────────────────────────────────────────────────
 
@@ -69,9 +97,7 @@ export function useCreateAlertRule() {
       toast.success('Alert rule created');
     },
     onError: (err: unknown) => {
-      const message =
-        (err as any)?.response?.data?.message ?? 'Failed to create alert rule';
-      toast.error(message);
+      toast.error((err as any)?.response?.data?.message ?? 'Failed to create alert rule');
     },
   });
 }
@@ -79,7 +105,7 @@ export function useCreateAlertRule() {
 export function useUpdateAlertRule() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ id, ...payload }: UpdateAlertRulePayload & { id: string }) => {
+    mutationFn: async ({ id, ...payload }: UpdateAlertRulePayload) => {
       const { data } = await api.patch(`/alerts/rules/${id}`, payload);
       return data.data as AlertRule;
     },
@@ -88,9 +114,7 @@ export function useUpdateAlertRule() {
       toast.success('Alert rule updated');
     },
     onError: (err: unknown) => {
-      const message =
-        (err as any)?.response?.data?.message ?? 'Failed to update alert rule';
-      toast.error(message);
+      toast.error((err as any)?.response?.data?.message ?? 'Failed to update alert rule');
     },
   });
 }
@@ -106,50 +130,49 @@ export function useDeleteAlertRule() {
       toast.success('Alert rule deleted');
     },
     onError: (err: unknown) => {
-      const message =
-        (err as any)?.response?.data?.message ?? 'Failed to delete alert rule';
-      toast.error(message);
+      toast.error((err as any)?.response?.data?.message ?? 'Failed to delete alert rule');
     },
   });
 }
 
 // ── Alert Events ───────────────────────────────────────────────────────
 
-export function useAlertEvents() {
+export function useAlertEvents(userId?: string) {
   return useQuery({
-    queryKey: ['alert-events'],
+    queryKey: ['alert-events', userId],
     queryFn: async () => {
-      const { data } = await api.get('/alerts/events');
+      const params = userId ? `?userId=${userId}` : '';
+      const { data } = await api.get(`/alerts/events${params}`);
       return data.data as AlertEvent[];
     },
     refetchInterval: 60_000,
   });
 }
 
-export function useAcknowledgeAlert() {
+export function useUnreadCount() {
+  return useQuery({
+    queryKey: ['alert-unread-count'],
+    queryFn: async () => {
+      const { data } = await api.get('/alerts/events/unread-count');
+      return (data as { count: number }).count;
+    },
+    refetchInterval: 30_000,
+  });
+}
+
+export function useMarkSeen() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (id: string) => {
-      const { data } = await api.post(`/alerts/events/${id}/acknowledge`);
+      const { data } = await api.patch(`/alerts/events/${id}/seen`);
       return data.data as AlertEvent;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['alert-events'] });
-      toast.success('Alert acknowledged');
+      queryClient.invalidateQueries({ queryKey: ['alert-unread-count'] });
     },
     onError: (err: unknown) => {
-      const message =
-        (err as any)?.response?.data?.message ?? 'Failed to acknowledge alert';
-      toast.error(message);
+      toast.error((err as any)?.response?.data?.message ?? 'Failed to mark alert as seen');
     },
   });
 }
-
-// ── Helpers ────────────────────────────────────────────────────────────
-
-export const METRIC_LABELS: Record<AlertMetric, string> = {
-  idle_time: 'Idle Time',
-  no_activity: 'No Activity',
-  late_clock_in: 'Late Clock-In',
-  missed_clock_in: 'Missed Clock-In',
-};
