@@ -10,6 +10,7 @@ import {
   HttpCode,
   HttpStatus,
   BadRequestException,
+  NotFoundException,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -20,6 +21,7 @@ import {
   ApiBody,
 } from '@nestjs/swagger';
 import { StreamingService } from './streaming.service';
+import { StreamingGateway } from './streaming.gateway';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -44,7 +46,10 @@ class UpdateStreamingConfigDto {
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('streaming')
 export class StreamingController {
-  constructor(private readonly streamingService: StreamingService) {}
+  constructor(
+    private readonly streamingService: StreamingService,
+    private readonly streamingGateway: StreamingGateway,
+  ) {}
 
   @Get('sessions')
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
@@ -108,5 +113,45 @@ export class StreamingController {
     @Body() body: UpdateStreamingConfigDto,
   ) {
     return this.streamingService.updateOrgStreamingConfig(user.organizationId, body);
+  }
+
+  @Post('request/:userId')
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({ summary: 'Request on-demand stream from agent' })
+  async requestStream(
+    @Param('userId') userId: string,
+    @CurrentUser() user: User,
+  ): Promise<{ accepted: boolean; userId: string }> {
+    const sent = this.streamingGateway.sendControlToAgent(userId, {
+      action: 'start_stream',
+      requestedBy: user.id,
+    });
+    if (!sent) {
+      const session = await this.streamingService.getSessionByUserId(userId);
+      if (!session) {
+        throw new NotFoundException(`Agent for user ${userId} is not currently connected`);
+      }
+      this.streamingGateway.sendControlToAgent(userId, { action: 'start_stream', requestedBy: user.id });
+    }
+    return { accepted: true, userId };
+  }
+
+  @Post('request/:userId/stop')
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({ summary: 'Stop on-demand stream for agent' })
+  async stopStream(
+    @Param('userId') userId: string,
+    @CurrentUser() user: User,
+  ): Promise<{ accepted: boolean; userId: string }> {
+    const sent = this.streamingGateway.sendControlToAgent(userId, {
+      action: 'stop_stream',
+      requestedBy: user.id,
+    });
+    if (!sent) {
+      throw new NotFoundException(`Agent for user ${userId} is not currently connected`);
+    }
+    return { accepted: true, userId };
   }
 }

@@ -16,7 +16,7 @@ import { AuthModule } from '../auth/auth.module';
   ],
   controllers: [StreamingController],
   providers: [StreamingGateway, StreamingService, EgressMonitorService],
-  exports: [StreamingService],
+  exports: [StreamingService, StreamingGateway],
 })
 export class StreamingModule implements OnModuleInit {
   constructor(

@@ -30,6 +30,7 @@ export class StreamingGateway implements OnGatewayConnection, OnGatewayDisconnec
 
   // Maps socketId → { userId, orgId, isAgent, timeout }
   private connections = new Map<string, ConnectionMeta>();
+  private agentSockets = new Map<string, string>(); // userId → socketId
 
   constructor(
     private streamingService: StreamingService,
@@ -51,6 +52,7 @@ export class StreamingGateway implements OnGatewayConnection, OnGatewayDisconnec
     if (agentUser) {
       const conn: ConnectionMeta = { userId: agentUser.id, orgId: agentUser.organizationId, isAgent: true };
       this.connections.set(client.id, conn);
+      this.agentSockets.set(agentUser.id, client.id);
       client.join(`agent:${agentUser.id}`);
       client.join(`org:${agentUser.organizationId}`);
       await this.streamingService.createSession(agentUser.id, agentUser.organizationId, client.id);
@@ -84,6 +86,7 @@ export class StreamingGateway implements OnGatewayConnection, OnGatewayDisconnec
     if (conn.timeout) clearTimeout(conn.timeout);
     this.connections.delete(client.id);
     if (conn.isAgent) {
+      this.agentSockets.delete(conn.userId);
       await this.streamingService.closeSession(client.id, 'disconnected');
       this.server.to(`org:${conn.orgId}`).emit('stream:offline', { userId: conn.userId });
     }
@@ -128,5 +131,12 @@ export class StreamingGateway implements OnGatewayConnection, OnGatewayDisconnec
   @SubscribeMessage('unsubscribe')
   handleUnsubscribe(client: Socket, payload: { userId: string }) {
     client.leave(`watchers:${payload.userId}`);
+  }
+
+  sendControlToAgent(userId: string, payload: Record<string, unknown>): boolean {
+    const socketId = this.agentSockets.get(userId);
+    if (!socketId) return false;
+    this.server?.to(socketId).emit('stream:control', payload);
+    return true;
   }
 }
