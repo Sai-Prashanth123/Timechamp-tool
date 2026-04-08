@@ -13,6 +13,7 @@ import { Organization } from '../../database/entities/organization.entity';
 export class BillingService {
   private readonly stripe: Stripe;
   private readonly logger = new Logger(BillingService.name);
+  private priceMap: Record<string, string> = {};
 
   constructor(
     @InjectRepository(Subscription)
@@ -25,6 +26,15 @@ export class BillingService {
       this.config.get<string>('STRIPE_SECRET_KEY')!,
       { apiVersion: '2023-10-16' },
     );
+    this.priceMap = {
+      [this.config.get<string>('STRIPE_PRICE_STARTER') ?? '']: 'starter',
+      [this.config.get<string>('STRIPE_PRICE_PRO') ?? '']: 'pro',
+      [this.config.get<string>('STRIPE_PRICE_ENTERPRISE') ?? '']: 'enterprise',
+    };
+  }
+
+  getPlanName(priceId: string): string | null {
+    return this.priceMap[priceId] ?? null;
   }
 
   async getSubscription(organizationId: string): Promise<Subscription | null> {
@@ -61,7 +71,7 @@ export class BillingService {
       line_items: [{ price: priceId, quantity: seats }],
       success_url: `${this.config.get('APP_URL')}/settings/billing?success=true`,
       cancel_url: `${this.config.get('APP_URL')}/settings/billing?canceled=true`,
-      metadata: { organizationId, seats: String(seats) },
+      metadata: { organizationId, seats: String(seats), priceId },
     });
 
     return { url: session.url! };
@@ -83,6 +93,36 @@ export class BillingService {
     return { url: session.url };
   }
 
+  async getInvoices(organizationId: string): Promise<Array<{
+    id: string;
+    number: string | null;
+    amount: number;
+    currency: string;
+    status: string | null;
+    created: number;
+    hostedInvoiceUrl: string | null;
+    invoicePdf: string | null;
+  }>> {
+    const sub = await this.subsRepo.findOne({ where: { organizationId } });
+    if (!sub?.stripeCustomerId) return [];
+
+    const invoices = await this.stripe.invoices.list({
+      customer: sub.stripeCustomerId,
+      limit: 24,
+    });
+
+    return invoices.data.map((inv) => ({
+      id: inv.id,
+      number: inv.number,
+      amount: inv.amount_paid,
+      currency: inv.currency,
+      status: inv.status ?? null,
+      created: inv.created,
+      hostedInvoiceUrl: inv.hosted_invoice_url ?? null,
+      invoicePdf: inv.invoice_pdf ?? null,
+    }));
+  }
+
   async handleWebhook(payload: Buffer, signature: string): Promise<void> {
     let event: Stripe.Event;
 
@@ -100,7 +140,8 @@ export class BillingService {
     switch (event.type) {
       case 'checkout.session.completed': {
         const session = event.data.object as Stripe.Checkout.Session;
-        const { organizationId, seats } = session.metadata!;
+        const { organizationId, seats, priceId } = session.metadata!;
+        const plan = this.getPlanName(priceId ?? '') ?? 'starter';
         await this.subsRepo.update(
           { organizationId },
           {
@@ -108,6 +149,7 @@ export class BillingService {
             stripeCustomerId: session.customer as string,
             status: SubscriptionStatus.ACTIVE,
             seats: parseInt(seats, 10),
+            plan,
           },
         );
         break;
@@ -146,6 +188,24 @@ export class BillingService {
             status: SubscriptionStatus.PAST_DUE,
           });
         }
+        break;
+      }
+
+      case 'invoice.payment_succeeded': {
+        const invoice = event.data.object as Stripe.Invoice;
+        const sub = await this.subsRepo.findOne({
+          where: { stripeCustomerId: invoice.customer as string },
+        });
+        if (sub && invoice.lines?.data[0]?.period?.end) {
+          await this.subsRepo.update(sub.id, {
+            currentPeriodEnd: new Date(invoice.lines.data[0].period.end * 1000),
+          });
+        }
+        break;
+      }
+
+      case 'customer.subscription.trial_will_end': {
+        this.logger.log(`Trial ending soon for subscription`);
         break;
       }
 

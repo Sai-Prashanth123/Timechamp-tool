@@ -97,3 +97,41 @@ export function useSubscription() {
     },
   });
 }
+
+// ── Invoices ────────────────────────────────────────────────────────────
+
+export type Invoice = {
+  id: string;
+  number: string | null;
+  amount: number;       // cents
+  currency: string;
+  status: string | null;
+  created: number;      // Unix timestamp
+  hostedInvoiceUrl: string | null;
+  invoicePdf: string | null;
+};
+
+export function useInvoices() {
+  return useQuery({
+    queryKey: ['billing-invoices'],
+    queryFn: async () => {
+      const { data } = await api.get('/billing/invoices');
+      return data.data as Invoice[];
+    },
+  });
+}
+
+// ── Checkout ────────────────────────────────────────────────────────────
+
+export function useCheckout() {
+  return useMutation({
+    mutationFn: async (payload: { priceId: string; seats: number }) => {
+      const { data } = await api.post('/billing/checkout', payload);
+      return data.data as { url: string };
+    },
+    onSuccess: ({ url }: { url: string }) => {
+      window.location.href = url;
+    },
+    onError: () => toast.error('Failed to create checkout session. Please try again.'),
+  });
+}
