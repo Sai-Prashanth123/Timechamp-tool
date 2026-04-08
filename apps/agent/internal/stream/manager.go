@@ -104,6 +104,18 @@ func (m *Manager) run() {
 			return
 
 		case <-heartbeat.C:
+			// Check heartbeat ACK timeout before sending next ping.
+			if m.client.TimeSinceLastAck() > 65*time.Second {
+				log.Printf("[stream] heartbeat ACK timeout (>65s), reconnecting")
+				// Close the underlying connection without signalling done,
+				// then reconnect with retry.
+				m.client.closeConn("heartbeat timeout")
+				if err := m.client.ConnectWithRetry(ctx); err != nil {
+					log.Printf("[stream] reconnect failed: %v", err)
+					return
+				}
+				go m.handleControlFrames(ctx)
+			}
 			_ = m.client.SendFrame(ctx, BuildHeartbeatFrame())
 
 		case <-screenTicker.C:
@@ -163,12 +175,16 @@ func (m *Manager) handleControlFrames(ctx context.Context) {
 			}
 			action, _ := cmd["action"].(string)
 			switch action {
+			case "start_stream", "start_full":
+				m.SetMode(ModeFull)
+			case "stop_stream", "stop_streaming", "session_timeout", "bandwidth_cap_exceeded":
+				m.SetMode(ModeIdle)
 			case "start_grid":
 				m.SetMode(ModeGrid)
-			case "start_full":
-				m.SetMode(ModeFull)
-			case "stop_streaming", "session_timeout", "bandwidth_cap_exceeded":
-				m.SetMode(ModeIdle)
+			case "set_mode":
+				if modeVal, ok := cmd["mode"].(string); ok && modeVal != "" {
+					m.SetMode(StreamMode(modeVal))
+				}
 			case "reduce_fps":
 				// Switch to grid mode (1 FPS) to reduce bandwidth
 				m.SetMode(ModeGrid)

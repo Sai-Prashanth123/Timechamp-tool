@@ -26,6 +26,13 @@ export class StreamingService {
     await this.sessionRepo.update({ socketId, isActive: true }, { isActive: false, endedAt: new Date(), disconnectReason: reason });
   }
 
+  async getSessionByUserId(userId: string): Promise<StreamSession | null> {
+    return this.sessionRepo.findOne({
+      where: { userId, isActive: true },
+      order: { startedAt: 'DESC' },
+    });
+  }
+
   async updateSessionMode(userId: string, mode: StreamMode): Promise<void> {
     await this.sessionRepo.update({ userId, isActive: true }, { mode });
   }

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { io, Socket } from 'socket.io-client'
+import api from '@/lib/api'
 
 export type StreamMode = 'idle' | 'grid' | 'full'
 
@@ -46,6 +47,7 @@ export function useStreaming(apiUrl: string, token: string) {
   const socketRef = useRef<Socket | null>(null)
   const [streams, setStreams] = useState<Map<string, EmployeeStream>>(new Map())
   const streamsRef = useRef<Map<string, EmployeeStream>>(new Map())
+  const [mutedStreams, setMutedStreams] = useState<Set<string>>(new Set())
 
   const updateStream = useCallback((userId: string, patch: Partial<EmployeeStream>) => {
     const current = streamsRef.current.get(userId) ?? {
@@ -144,5 +146,45 @@ export function useStreaming(apiUrl: string, token: string) {
     // No-op: fullscreen mode is UI-only
   }, [])
 
-  return { streams, subscribe, unsubscribe, requestFullscreen, stopFullscreen }
+  // Call API to trigger on-demand stream from agent, then auto-subscribe
+  const requestStream = useCallback(async (userId: string): Promise<boolean> => {
+    try {
+      await api.post(`/streaming/request/${userId}`)
+      subscribe(userId)
+      return true
+    } catch {
+      return false
+    }
+  }, [subscribe])
+
+  // Stop on-demand stream via API then unsubscribe
+  const stopStream = useCallback(async (userId: string): Promise<void> => {
+    try {
+      await api.post(`/streaming/request/${userId}/stop`)
+      unsubscribe(userId)
+    } catch {
+      // ignore
+    }
+  }, [unsubscribe])
+
+  // Toggle muted state for a stream
+  const muteStream = useCallback((userId: string, muted: boolean) => {
+    setMutedStreams(prev => {
+      const next = new Set(prev)
+      if (muted) next.add(userId); else next.delete(userId)
+      return next
+    })
+  }, [])
+
+  return {
+    streams,
+    subscribe,
+    unsubscribe,
+    requestFullscreen,
+    stopFullscreen,
+    requestStream,
+    stopStream,
+    muteStream,
+    mutedStreams,
+  }
 }

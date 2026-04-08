@@ -18,6 +18,8 @@ type StreamClient struct {
 	mu         sync.Mutex
 	ctrlCh     chan []byte
 	done       chan struct{}
+	lastAck    time.Time
+	lastAckMu  sync.Mutex
 }
 
 // NewStreamClient creates a new StreamClient.
@@ -27,7 +29,22 @@ func NewStreamClient(wsURL, agentToken string) *StreamClient {
 		agentToken: agentToken,
 		ctrlCh:     make(chan []byte, 16),
 		done:       make(chan struct{}),
+		lastAck:    time.Now(),
 	}
+}
+
+// TimeSinceLastAck returns how long it has been since the last heartbeat ACK.
+func (c *StreamClient) TimeSinceLastAck() time.Duration {
+	c.lastAckMu.Lock()
+	defer c.lastAckMu.Unlock()
+	return time.Since(c.lastAck)
+}
+
+// resetLastAck records the current time as the last received heartbeat ACK.
+func (c *StreamClient) resetLastAck() {
+	c.lastAckMu.Lock()
+	c.lastAck = time.Now()
+	c.lastAckMu.Unlock()
 }
 
 // Connect establishes the WebSocket connection with retry.
@@ -67,12 +84,19 @@ func (c *StreamClient) ControlFrames() <-chan []byte {
 	return c.ctrlCh
 }
 
-// Disconnect closes the connection.
+// Disconnect closes the connection and signals the read loop to stop.
 func (c *StreamClient) Disconnect() {
 	close(c.done)
+	c.closeConn("agent disconnecting")
+}
+
+// closeConn closes the underlying WebSocket connection without closing the done channel.
+// Used internally for reconnect scenarios.
+func (c *StreamClient) closeConn(reason string) {
 	c.mu.Lock()
 	if c.conn != nil {
-		c.conn.Close(websocket.StatusNormalClosure, "agent disconnecting")
+		c.conn.Close(websocket.StatusNormalClosure, reason)
+		c.conn = nil
 	}
 	c.mu.Unlock()
 }
@@ -98,11 +122,15 @@ func (c *StreamClient) readLoop(ctx context.Context) {
 		if err != nil {
 			continue
 		}
-		if f.Type == FrameTypeControl {
+		switch f.Type {
+		case FrameTypeControl:
 			select {
 			case c.ctrlCh <- f.Payload:
 			default:
 			}
+		case FrameTypeHeartbeat:
+			// Server ACK'd our heartbeat — reset the timeout clock.
+			c.resetLastAck()
 		}
 	}
 }

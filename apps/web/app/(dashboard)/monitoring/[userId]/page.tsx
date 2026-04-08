@@ -1,21 +1,37 @@
 'use client';
 
 import { useState } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { Header } from '@/components/dashboard/header';
 import { ActivityTimeline } from '@/components/monitoring/activity-timeline';
 import { ScreenshotGallery } from '@/components/monitoring/screenshot-gallery';
 import { useMonitoringStore } from '@/stores/monitoring-store';
 import { todayISO, elapsedSince } from '@/hooks/use-monitoring';
+import api from '@/lib/api';
 
 type Tab = 'live' | 'screenshots' | 'activity';
 
 export default function EmployeeMonitoringPage() {
   const params = useParams();
+  const router = useRouter();
   const userId = params.userId as string;
 
   const [tab, setTab] = useState<Tab>('live');
   const [selectedDate, setSelectedDate] = useState(todayISO());
+  const [isRequesting, setIsRequesting] = useState(false);
+
+  const handleWatchLive = async () => {
+    setIsRequesting(true);
+    try {
+      await api.post(`/streaming/request/${userId}`);
+      router.push(`/live?focus=${userId}`);
+    } catch {
+      // Agent offline — navigate anyway to show offline state
+      router.push(`/live?focus=${userId}`);
+    } finally {
+      setIsRequesting(false);
+    }
+  };
 
   const employee = useMonitoringStore((s) => s.employees[userId]);
   const names = useMonitoringStore((s) => s.employeeNames[userId]);
@@ -68,7 +84,16 @@ export default function EmployeeMonitoringPage() {
 
         {tab === 'live' && (
           <div className="rounded-lg border bg-white p-6 shadow-sm space-y-4">
-            <h3 className="text-sm font-semibold text-slate-700">Current Status</h3>
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-slate-700">Current Status</h3>
+              <button
+                onClick={handleWatchLive}
+                disabled={isRequesting}
+                className="flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium bg-blue-600 hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed text-white transition-colors"
+              >
+                {isRequesting ? 'Connecting...' : '▶ Watch Live'}
+              </button>
+            </div>
             {employee ? (
               <div className="flex items-center gap-4">
                 <span
