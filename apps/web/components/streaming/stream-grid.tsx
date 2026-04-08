@@ -11,9 +11,12 @@ interface Props {
   unsubscribe: (userId: string) => void
   requestFullscreen: (userId: string) => void
   stopFullscreen: (userId: string) => void
+  stopStream?: (userId: string) => Promise<void>
+  muteStream?: (userId: string, muted: boolean) => void
+  mutedStreams?: Set<string>
 }
 
-export function StreamGrid({ streams, subscribe, unsubscribe, requestFullscreen, stopFullscreen }: Props) {
+export function StreamGrid({ streams, subscribe, unsubscribe, requestFullscreen, stopFullscreen, stopStream, muteStream, mutedStreams }: Props) {
   const observerRef = useRef<IntersectionObserver | null>(null)
   const tileRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   const [fullscreenUserId, setFullscreenUserId] = useState<string | null>(null)
@@ -94,6 +97,9 @@ export function StreamGrid({ streams, subscribe, unsubscribe, requestFullscreen,
         <StreamFullscreen
           stream={fullscreenStream}
           onClose={handleCloseFullscreen}
+          stopStream={stopStream}
+          muteStream={muteStream}
+          isMuted={mutedStreams?.has(fullscreenStream.userId) ?? false}
         />
       )}
     </>

@@ -1,12 +1,34 @@
 'use client'
 
+import { useEffect } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { useStreaming } from '@/hooks/use-streaming'
 import { StreamGrid } from '@/components/streaming/stream-grid'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001'
 
 export function LivePageClient({ token }: { token: string }) {
-  const { streams, subscribe, unsubscribe, requestFullscreen, stopFullscreen } = useStreaming(API_URL, token)
+  const searchParams = useSearchParams()
+  const focusUserId = searchParams.get('focus')
+
+  const {
+    streams,
+    subscribe,
+    unsubscribe,
+    requestFullscreen,
+    stopFullscreen,
+    requestStream,
+    stopStream,
+    muteStream,
+    mutedStreams,
+  } = useStreaming(API_URL, token)
+
+  // Auto-request stream for focused user when navigating from Watch Live button
+  useEffect(() => {
+    if (focusUserId) {
+      requestStream(focusUserId)
+    }
+  }, [focusUserId, requestStream])
 
   return (
     <div className="min-h-screen bg-zinc-950">
@@ -20,6 +42,9 @@ export function LivePageClient({ token }: { token: string }) {
         unsubscribe={unsubscribe}
         requestFullscreen={requestFullscreen}
         stopFullscreen={stopFullscreen}
+        stopStream={stopStream}
+        muteStream={muteStream}
+        mutedStreams={mutedStreams}
       />
     </div>
   )
