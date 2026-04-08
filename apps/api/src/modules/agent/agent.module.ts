@@ -8,9 +8,10 @@ import { Screenshot } from '../../database/entities/screenshot.entity';
 import { User } from '../../database/entities/user.entity';
 import { GpsLocation } from '../../database/entities/gps-location.entity';
 import { Organization } from '../../database/entities/organization.entity';
+import { AgentDevice } from '../../database/entities/agent-device.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([ActivityEvent, Screenshot, User, GpsLocation, Organization])],
+  imports: [TypeOrmModule.forFeature([ActivityEvent, Screenshot, User, GpsLocation, Organization, AgentDevice])],
   controllers: [AgentController],
   providers: [AgentService, AgentAuthGuard],
   exports: [AgentService],
