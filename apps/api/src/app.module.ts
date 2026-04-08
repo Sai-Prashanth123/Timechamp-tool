@@ -40,6 +40,7 @@ import { Geofence } from './database/entities/geofence.entity';
 import { ProjectsModule } from './modules/projects/projects.module';
 import { StreamSession } from './database/entities/stream-session.entity';
 import { StreamingModule } from './modules/streaming/streaming.module';
+import { AgentDevice } from './database/entities/agent-device.entity';
 
 @Module({
   imports: [
@@ -93,6 +94,7 @@ import { StreamingModule } from './modules/streaming/streaming.module';
           AlertRule,
           AlertEvent,
           StreamSession,
+          AgentDevice,
         ],
         migrations: ['dist/database/migrations/*.js'],
         migrationsRun: config.get('NODE_ENV') !== 'production',
