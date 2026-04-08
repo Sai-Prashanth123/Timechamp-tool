@@ -75,6 +75,7 @@ jobs:
           CGO_ENABLED: '0'
         run: |
           cd apps/agent
+          rm -f cmd/setup/agent_bin
           go build \
             -ldflags "-w -s -X main.Version=${{ github.ref_name }} -X main.BuildDate=$(date -u +%Y-%m-%d)" \
             -o cmd/setup/agent_bin \
