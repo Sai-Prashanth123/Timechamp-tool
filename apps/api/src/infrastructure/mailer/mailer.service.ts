@@ -87,4 +87,27 @@ export class MailerService {
       </div>`,
     );
   }
+
+  async sendAlertEmail(
+    to: string,
+    ruleName: string,
+    message: string,
+    employeeName: string,
+  ): Promise<void> {
+    await this.send(
+      to,
+      `Alert: ${ruleName} — TimeChamp`,
+      `<div style="font-family:sans-serif;max-width:480px;margin:0 auto">
+        <h2 style="color:#1e293b">Alert Notification</h2>
+        <p style="color:#475569">Hi <strong>${employeeName}</strong>,</p>
+        <div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:16px;margin:16px 0">
+          <p style="margin:0;color:#92400e;font-weight:600">${ruleName}</p>
+          <p style="margin:8px 0 0;color:#78350f">${message}</p>
+        </div>
+        <p style="color:#94a3b8;font-size:12px">
+          This alert was generated automatically by TimeChamp. Log in to review.
+        </p>
+      </div>`,
+    );
+  }
 }

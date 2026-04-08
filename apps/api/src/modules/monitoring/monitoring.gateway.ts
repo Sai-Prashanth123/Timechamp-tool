@@ -26,6 +26,16 @@ export interface EmployeeActivityPayload {
   timestamp: Date;
 }
 
+export interface AlertEventPayload {
+  eventId: string;
+  ruleId: string;
+  ruleName: string;
+  type: string;
+  userId: string;
+  message: string;
+  triggeredAt: Date;
+}
+
 @WebSocketGateway({ namespace: '/monitoring', cors: true })
 export class MonitoringGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() server: Server;
@@ -61,5 +71,9 @@ export class MonitoringGateway implements OnGatewayConnection, OnGatewayDisconne
 
   emitActivityUpdate(orgId: string, payload: EmployeeActivityPayload): void {
     this.server?.to(`org:${orgId}`).emit('employee:activity', payload);
+  }
+
+  emitAlertNew(orgId: string, payload: AlertEventPayload): void {
+    this.server?.to(`org:${orgId}`).emit('alert:new', payload);
   }
 }
