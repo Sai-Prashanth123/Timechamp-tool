@@ -40,4 +40,10 @@ export class BillingController {
   createPortal(@CurrentUser() user: User) {
     return this.billingService.createPortalSession(user.organizationId);
   }
+
+  @Get('invoices')
+  @ApiOperation({ summary: 'List Stripe invoices for this organization' })
+  getInvoices(@CurrentUser() user: User) {
+    return this.billingService.getInvoices(user.organizationId);
+  }
 }
