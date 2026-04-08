@@ -1,16 +1,17 @@
 'use client';
 
-import { use } from 'react';
+import { use, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Header } from '@/components/dashboard/header';
 import { KanbanBoard } from '@/components/projects/kanban-board';
 import { MilestoneList } from '@/components/projects/milestone-list';
+import { TaskDetailDrawer } from '@/components/projects/task-detail-drawer';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
-import { useProject, type ProjectStatus } from '@/hooks/use-projects';
-import { ArrowLeft, CalendarDays } from 'lucide-react';
+import { useProject, type ProjectStatus, type Task } from '@/hooks/use-projects';
+import { ArrowLeft, CalendarDays, LayoutGrid, List } from 'lucide-react';
 
 const STATUS_VARIANT: Record<
   ProjectStatus,
@@ -30,6 +31,8 @@ export default function ProjectDetailPage({ params }: PageProps) {
   const { id } = use(params);
   const router = useRouter();
   const { data, isLoading, isError } = useProject(id);
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [activeTab, setActiveTab] = useState<'board' | 'list'>('board');
 
   if (isLoading) {
     return (
@@ -108,15 +111,63 @@ export default function ProjectDetailPage({ params }: PageProps) {
           </div>
         </div>
 
-        {/* Kanban board */}
+        {/* Tab switcher */}
+        <div className="flex items-center gap-2">
+          <Button
+            variant={activeTab === 'board' ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setActiveTab('board')}
+            className="gap-1.5"
+          >
+            <LayoutGrid className="h-4 w-4" />
+            Board
+          </Button>
+          <Button
+            variant={activeTab === 'list' ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setActiveTab('list')}
+            className="gap-1.5"
+          >
+            <List className="h-4 w-4" />
+            List
+          </Button>
+        </div>
+
+        {/* Kanban board / List */}
         <Card>
           <CardHeader className="pb-4">
-            <CardTitle className="text-base">Task Board</CardTitle>
+            <CardTitle className="text-base">{activeTab === 'board' ? 'Task Board' : 'Task List'}</CardTitle>
           </CardHeader>
           <CardContent>
-            <KanbanBoard tasks={tasks} projectId={id} />
+            {activeTab === 'board' ? (
+              <KanbanBoard tasks={tasks} projectId={id} onSelectTask={(t) => setSelectedTask(t)} />
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {tasks.length === 0 ? (
+                  <p className="text-sm text-muted-foreground py-4 text-center">No tasks yet.</p>
+                ) : (
+                  tasks.map((t) => (
+                    <button
+                      key={t.id}
+                      onClick={() => setSelectedTask(t)}
+                      className="w-full text-left px-3 py-3 hover:bg-slate-50 transition-colors flex items-center gap-3"
+                    >
+                      <span className="flex-1 text-sm font-medium text-slate-800 truncate">{t.title}</span>
+                      <span className="text-[10px] capitalize text-slate-500">{t.status.replace(/_/g, ' ')}</span>
+                      {t.priority && (
+                        <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600">
+                          {t.priority}
+                        </span>
+                      )}
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
           </CardContent>
         </Card>
+
+        <TaskDetailDrawer task={selectedTask} onClose={() => setSelectedTask(null)} />
 
         {/* Milestones */}
         <Card>

@@ -5,6 +5,7 @@ import { ProjectsService } from './projects.service';
 import { Project } from '../../database/entities/project.entity';
 import { Task } from '../../database/entities/task.entity';
 import { Milestone } from '../../database/entities/milestone.entity';
+import { TaskComment } from '../../database/entities/task-comment.entity';
 
 type MockRepo<T = any> = {
   find: jest.Mock;
@@ -31,17 +32,20 @@ describe('ProjectsService', () => {
   let projectRepo: MockRepo<Project>;
   let taskRepo: MockRepo<Task>;
   let milestoneRepo: MockRepo<Milestone>;
+  let commentRepo: MockRepo<TaskComment>;
 
   const ORG_ID = 'org-1';
   const USER_ID = 'user-1';
   const PROJECT_ID = 'proj-1';
   const TASK_ID = 'task-1';
   const MILESTONE_ID = 'ms-1';
+  const COMMENT_ID = 'comment-1';
 
   beforeEach(async () => {
     projectRepo = mockRepo<Project>();
     taskRepo = mockRepo<Task>();
     milestoneRepo = mockRepo<Milestone>();
+    commentRepo = mockRepo<TaskComment>();
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -49,6 +53,7 @@ describe('ProjectsService', () => {
         { provide: getRepositoryToken(Project), useValue: projectRepo },
         { provide: getRepositoryToken(Task), useValue: taskRepo },
         { provide: getRepositoryToken(Milestone), useValue: milestoneRepo },
+        { provide: getRepositoryToken(TaskComment), useValue: commentRepo },
       ],
     }).compile();
 
@@ -309,6 +314,115 @@ describe('ProjectsService', () => {
       await service.deleteTask(PROJECT_ID, TASK_ID, ORG_ID);
 
       expect(taskRepo.delete).toHaveBeenCalledWith(TASK_ID);
+    });
+  });
+
+  // ── moveTask ───────────────────────────────────────────────────────
+  describe('moveTask', () => {
+    it('updates status and position on the task', async () => {
+      const existing: Partial<Task> = {
+        id: TASK_ID,
+        projectId: PROJECT_ID,
+        organizationId: ORG_ID,
+        status: 'todo',
+        position: 0,
+      };
+      const updated = { ...existing, status: 'in_progress', position: 2 };
+      projectRepo.findOne.mockResolvedValue({ id: PROJECT_ID, organizationId: ORG_ID });
+      taskRepo.findOne.mockResolvedValue(existing);
+      taskRepo.save.mockResolvedValue(updated);
+
+      const result = await service.moveTask(PROJECT_ID, TASK_ID, ORG_ID, {
+        status: 'in_progress',
+        position: 2,
+      });
+
+      expect(taskRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'in_progress', position: 2 }),
+      );
+      expect(result.status).toBe('in_progress');
+      expect(result.position).toBe(2);
+    });
+
+    it('throws ForbiddenException when project is not in org', async () => {
+      projectRepo.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.moveTask(PROJECT_ID, TASK_ID, 'wrong-org', { status: 'done', position: 0 }),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('throws NotFoundException when task does not exist', async () => {
+      projectRepo.findOne.mockResolvedValue({ id: PROJECT_ID, organizationId: ORG_ID });
+      taskRepo.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.moveTask(PROJECT_ID, 'bad-task', ORG_ID, { status: 'done', position: 0 }),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  // ── addComment ─────────────────────────────────────────────────────
+  describe('addComment', () => {
+    it('creates and returns a comment', async () => {
+      const task: Partial<Task> = { id: TASK_ID, projectId: PROJECT_ID, organizationId: ORG_ID };
+      const comment: Partial<TaskComment> = {
+        id: COMMENT_ID,
+        taskId: TASK_ID,
+        userId: USER_ID,
+        content: 'Looks good!',
+      };
+      projectRepo.findOne.mockResolvedValue({ id: PROJECT_ID, organizationId: ORG_ID });
+      taskRepo.findOne.mockResolvedValue(task);
+      commentRepo.create.mockReturnValue(comment);
+      commentRepo.save.mockResolvedValue(comment);
+
+      const result = await service.addComment(PROJECT_ID, TASK_ID, ORG_ID, USER_ID, 'Looks good!');
+
+      expect(commentRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId: TASK_ID, userId: USER_ID, content: 'Looks good!' }),
+      );
+      expect(result.id).toBe(COMMENT_ID);
+    });
+
+    it('throws NotFoundException when task does not exist', async () => {
+      projectRepo.findOne.mockResolvedValue({ id: PROJECT_ID, organizationId: ORG_ID });
+      taskRepo.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.addComment(PROJECT_ID, 'bad-task', ORG_ID, USER_ID, 'comment'),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  // ── getComments ────────────────────────────────────────────────────
+  describe('getComments', () => {
+    it('returns comments for a task ordered by createdAt ASC', async () => {
+      const task: Partial<Task> = { id: TASK_ID, projectId: PROJECT_ID, organizationId: ORG_ID };
+      const comments: Partial<TaskComment>[] = [
+        { id: COMMENT_ID, taskId: TASK_ID, content: 'First' },
+        { id: 'comment-2', taskId: TASK_ID, content: 'Second' },
+      ];
+      projectRepo.findOne.mockResolvedValue({ id: PROJECT_ID, organizationId: ORG_ID });
+      taskRepo.findOne.mockResolvedValue(task);
+      commentRepo.find.mockResolvedValue(comments);
+
+      const result = await service.getComments(PROJECT_ID, TASK_ID, ORG_ID);
+
+      expect(commentRepo.find).toHaveBeenCalledWith({
+        where: { taskId: TASK_ID },
+        order: { createdAt: 'ASC' },
+      });
+      expect(result).toHaveLength(2);
+    });
+
+    it('throws NotFoundException when task does not exist', async () => {
+      projectRepo.findOne.mockResolvedValue({ id: PROJECT_ID, organizationId: ORG_ID });
+      taskRepo.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.getComments(PROJECT_ID, 'bad-task', ORG_ID),
+      ).rejects.toThrow(NotFoundException);
     });
   });
 

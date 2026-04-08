@@ -8,12 +8,14 @@ import { Repository } from 'typeorm';
 import { Project } from '../../database/entities/project.entity';
 import { Task } from '../../database/entities/task.entity';
 import { Milestone } from '../../database/entities/milestone.entity';
+import { TaskComment } from '../../database/entities/task-comment.entity';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
 import { CreateMilestoneDto } from './dto/create-milestone.dto';
 import { UpdateMilestoneDto } from './dto/update-milestone.dto';
+import { MoveTaskDto } from './dto/move-task.dto';
 
 @Injectable()
 export class ProjectsService {
@@ -24,6 +26,8 @@ export class ProjectsService {
     private taskRepo: Repository<Task>,
     @InjectRepository(Milestone)
     private milestoneRepo: Repository<Milestone>,
+    @InjectRepository(TaskComment)
+    private commentRepo: Repository<TaskComment>,
   ) {}
 
   // ── Internal helpers ────────────────────────────────────────────────
@@ -62,6 +66,7 @@ export class ProjectsService {
       description: dto.description ?? null,
       status: 'active',
       deadline: dto.deadline ? new Date(dto.deadline) : null,
+      color: dto.color ?? '#3B82F6',
     });
     return this.projectRepo.save(project);
   }
@@ -106,6 +111,7 @@ export class ProjectsService {
     if (dto.deadline !== undefined) {
       project.deadline = dto.deadline ? new Date(dto.deadline) : null;
     }
+    if (dto.color !== undefined) project.color = dto.color;
     return this.projectRepo.save(project);
   }
 
@@ -261,5 +267,63 @@ export class ProjectsService {
       throw new NotFoundException('Milestone not found');
     }
     await this.milestoneRepo.delete(milestoneId);
+  }
+
+  // ── Task Move ───────────────────────────────────────────────────────
+
+  async moveTask(
+    projectId: string,
+    taskId: string,
+    organizationId: string,
+    dto: MoveTaskDto,
+  ): Promise<Task> {
+    await this.findProjectInOrg(projectId, organizationId);
+    const task = await this.taskRepo.findOne({
+      where: { id: taskId, projectId, organizationId },
+    });
+    if (!task) {
+      throw new NotFoundException('Task not found');
+    }
+    task.status = dto.status;
+    task.position = dto.position;
+    return this.taskRepo.save(task);
+  }
+
+  // ── Comments ────────────────────────────────────────────────────────
+
+  async addComment(
+    projectId: string,
+    taskId: string,
+    organizationId: string,
+    userId: string,
+    content: string,
+  ): Promise<TaskComment> {
+    await this.findProjectInOrg(projectId, organizationId);
+    const task = await this.taskRepo.findOne({
+      where: { id: taskId, projectId, organizationId },
+    });
+    if (!task) {
+      throw new NotFoundException('Task not found');
+    }
+    const comment = this.commentRepo.create({ taskId, userId, content });
+    return this.commentRepo.save(comment);
+  }
+
+  async getComments(
+    projectId: string,
+    taskId: string,
+    organizationId: string,
+  ): Promise<TaskComment[]> {
+    await this.findProjectInOrg(projectId, organizationId);
+    const task = await this.taskRepo.findOne({
+      where: { id: taskId, projectId, organizationId },
+    });
+    if (!task) {
+      throw new NotFoundException('Task not found');
+    }
+    return this.commentRepo.find({
+      where: { taskId },
+      order: { createdAt: 'ASC' },
+    });
   }
 }

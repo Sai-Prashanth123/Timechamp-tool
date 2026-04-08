@@ -26,6 +26,9 @@ export class Project {
   @Column({ name: 'deadline', type: 'timestamptz', nullable: true })
   deadline: Date | null;
 
+  @Column({ length: 7, default: '#3B82F6' })
+  color: string;
+
   @Column({ name: 'created_by' })
   createdBy: string;
 
