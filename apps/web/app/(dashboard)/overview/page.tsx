@@ -4,6 +4,7 @@ import { Header } from '@/components/dashboard/header';
 import { useLiveStatus, elapsedSince } from '@/hooks/use-monitoring';
 import { useTimesheets } from '@/hooks/use-time-tracking';
 import { useProjects } from '@/hooks/use-projects';
+import { useMonitoringStore } from '@/stores/monitoring-store';
 
 // ── Stat Card ──────────────────────────────────────────────────────────
 
@@ -31,6 +32,7 @@ export default function OverviewPage() {
   const { data: liveEmployees, isLoading: liveLoading } = useLiveStatus();
   const { data: timesheets, isLoading: tsLoading } = useTimesheets();
   const { data: projects, isLoading: projectsLoading } = useProjects();
+  const storeEmployees = useMonitoringStore((s) => s.employees);
 
   const onlineCount = liveEmployees?.length ?? 0;
 
@@ -91,25 +93,39 @@ export default function OverviewPage() {
               </p>
             ) : (
               <ul className="divide-y divide-slate-100">
-                {liveEmployees.slice(0, 8).map((emp) => (
-                  <li
-                    key={emp.userId}
-                    className="flex items-center justify-between py-2"
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="inline-block h-2 w-2 rounded-full bg-green-400" />
-                      <span className="text-sm font-medium text-slate-800">
-                        {emp.firstName} {emp.lastName}
-                      </span>
-                    </div>
-                    <div className="text-right text-xs text-slate-500">
-                      <p>{emp.currentApp ?? 'Idle'}</p>
-                      <p className="text-slate-400">
-                        {elapsedSince(emp.clockedInSince)} elapsed
-                      </p>
-                    </div>
-                  </li>
-                ))}
+                {liveEmployees.slice(0, 8).map((emp) => {
+                  const live = storeEmployees[emp.userId];
+                  // Fall back to 'online' since REST only returns active employees
+                  const status = live?.status ?? 'online';
+                  const dotColour =
+                    status === 'online'
+                      ? 'bg-green-400'
+                      : status === 'idle'
+                      ? 'bg-yellow-400'
+                      : 'bg-slate-300';
+                  return (
+                    <li
+                      key={emp.userId}
+                      className="flex items-center justify-between py-2"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className={`inline-block h-2 w-2 rounded-full ${dotColour}`} />
+                        <a
+                          href={`/monitoring/${emp.userId}`}
+                          className="text-sm font-medium text-slate-800 hover:text-blue-600 hover:underline"
+                        >
+                          {emp.firstName} {emp.lastName}
+                        </a>
+                      </div>
+                      <div className="text-right text-xs text-slate-500">
+                        <p>{live?.activeApp ?? emp.currentApp ?? 'Idle'}</p>
+                        <p className="text-slate-400">
+                          {elapsedSince(emp.clockedInSince)} elapsed
+                        </p>
+                      </div>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </div>
