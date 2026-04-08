@@ -55,9 +55,9 @@ jobs:
     strategy:
       matrix:
         include:
-          - { runner: windows-latest, goos: windows, goarch: amd64, suffix: windows-amd64, ext: .exe, agent_ext: .exe }
-          - { runner: macos-latest,   goos: darwin,  goarch: arm64, suffix: darwin-arm64,  ext: '',   agent_ext: ''   }
-          - { runner: ubuntu-latest,  goos: linux,   goarch: amd64, suffix: linux-amd64,   ext: '',   agent_ext: ''   }
+          - { runner: windows-latest, goos: windows, goarch: amd64, suffix: windows-amd64, ext: .exe }
+          - { runner: macos-latest,   goos: darwin,  goarch: arm64, suffix: darwin-arm64,  ext: ''   }
+          - { runner: ubuntu-latest,  goos: linux,   goarch: amd64, suffix: linux-amd64,   ext: ''   }
 
     steps:
       - uses: actions/checkout@v4
@@ -77,10 +77,8 @@ jobs:
           cd apps/agent
           go build \
             -ldflags "-w -s -X main.Version=${{ github.ref_name }} -X main.BuildDate=$(date -u +%Y-%m-%d)" \
-            -o cmd/setup/agent_bin${{ matrix.agent_ext }} \
+            -o cmd/setup/agent_bin \
             ./cmd/agent
-          # Rename to the fixed embed name
-          mv cmd/setup/agent_bin${{ matrix.agent_ext }} cmd/setup/agent_bin
 
       - name: Build setup installer (with agent embedded)
         shell: bash
