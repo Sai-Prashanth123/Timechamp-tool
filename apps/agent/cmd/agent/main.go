@@ -143,7 +143,7 @@ func main() {
 		select {
 
 		case <-quit:
-			log.Println("Shutting down agent...")
+			log.Println("Shutdown signal received, flushing buffer...")
 			// Flush current window session
 			if currentWindow.AppName != "" {
 				_ = db.InsertActivity(buffer.ActivityEvent{
@@ -156,10 +156,14 @@ func main() {
 					EndedAt:     time.Now(),
 				})
 			}
-			// Final sync before exit
+			// Final sync before exit — flush all buffered data to the API.
 			_, _ = uploader.FlushActivity()
 			_, _ = uploader.FlushKeystrokes()
 			_, _ = uploader.FlushScreenshots()
+			// Brief pause to allow the stream manager to drain its send buffer
+			// before the deferred sm.Stop() closes the WebSocket connection.
+			time.Sleep(2 * time.Second)
+			log.Println("Shutting down agent.")
 			return
 
 		case <-activityTicker.C:
