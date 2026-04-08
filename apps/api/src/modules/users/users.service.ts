@@ -14,6 +14,7 @@ import { InviteUserDto } from './dto/invite-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { TokenService } from '../../infrastructure/token/token.service';
 import { MailerService } from '../../infrastructure/mailer/mailer.service';
+import { AuditLogService } from '../admin/audit-log.service';
 
 @Injectable()
 export class UsersService {
@@ -22,6 +23,7 @@ export class UsersService {
     @InjectRepository(Organization) private orgsRepo: Repository<Organization>,
     private tokenService: TokenService,
     private mailerService: MailerService,
+    private auditLogService: AuditLogService,
   ) {}
 
   async findAll(organizationId: string): Promise<User[]> {
@@ -79,6 +81,16 @@ export class UsersService {
     const organization = await this.orgsRepo.findOne({ where: { id: organizationId } });
     const orgName = organization ? organization.name : 'your organization';
     await this.mailerService.sendInviteEmail(savedUser.email, inviterName, orgName, token);
+
+    // Fire-and-forget audit log — do not block invite response
+    void this.auditLogService.log(
+      organizationId,
+      { id: invitedBy, email: inviter?.email ?? 'unknown' },
+      'user.invited',
+      'user',
+      savedUser.id,
+      { invitedEmail: dto.email, role: dto.role },
+    );
 
     return savedUser;
   }

@@ -8,6 +8,7 @@ import {
   SubscriptionStatus,
 } from '../../database/entities/subscription.entity';
 import { Organization } from '../../database/entities/organization.entity';
+import { AuditLogService } from '../admin/audit-log.service';
 
 @Injectable()
 export class BillingService {
@@ -21,6 +22,7 @@ export class BillingService {
     @InjectRepository(Organization)
     private orgsRepo: Repository<Organization>,
     private config: ConfigService,
+    private auditLogService: AuditLogService,
   ) {
     this.stripe = new Stripe(
       this.config.get<string>('STRIPE_SECRET_KEY')!,
@@ -161,6 +163,7 @@ export class BillingService {
           where: { stripeSubscriptionId: stripeSub.id },
         });
         if (sub) {
+          const oldStatus = sub.status;
           const status =
             stripeSub.status === 'active'
               ? SubscriptionStatus.ACTIVE
@@ -174,6 +177,14 @@ export class BillingService {
             ),
             currentPeriodEnd: new Date(stripeSub.current_period_end * 1000),
           });
+          void this.auditLogService.log(
+            sub.organizationId,
+            { id: null, email: 'stripe-webhook' },
+            'subscription.changed',
+            'subscription',
+            sub.id,
+            { oldStatus, newStatus: status, plan: sub.plan },
+          );
         }
         break;
       }
