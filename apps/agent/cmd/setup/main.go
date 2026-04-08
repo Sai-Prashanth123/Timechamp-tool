@@ -1,8 +1,9 @@
 // Package main is the TimeChamp Agent GUI setup wizard.
-// Uses native OS dialogs (zenity) — no CGO, no OpenGL, works on Windows/macOS/Linux.
+// The agent binary is embedded at compile time — one file, no separate download needed.
 package main
 
 import (
+	_ "embed"
 	"fmt"
 	"os"
 	"os/exec"
@@ -17,6 +18,12 @@ import (
 	agentsync "github.com/timechamp/agent/internal/sync"
 )
 
+// agentBinary is the agent executable embedded at compile time by CI.
+// The CI builds the agent first, copies it to cmd/setup/agent_bin, then builds setup.
+//
+//go:embed agent_bin
+var agentBinary []byte
+
 func main() {
 	cfg := config.Load()
 
@@ -28,7 +35,6 @@ func main() {
 		zenity.Width(480),
 	)
 	if err != nil {
-		// User cancelled
 		os.Exit(0)
 	}
 	apiURL = strings.TrimSpace(apiURL)
@@ -58,7 +64,7 @@ func main() {
 	)
 	if progress != nil {
 		_ = progress.Text("Registering device with server…")
-		_ = progress.Value(25)
+		_ = progress.Value(20)
 	}
 
 	// ── Register ──────────────────────────────────────────────────────────────
@@ -79,7 +85,7 @@ func main() {
 
 	if progress != nil {
 		_ = progress.Text("Saving credentials…")
-		_ = progress.Value(60)
+		_ = progress.Value(50)
 	}
 
 	if err := keychain.SaveToken(agentToken); err != nil {
@@ -89,7 +95,6 @@ func main() {
 		_ = zenity.Error(fmt.Sprintf("Failed to save token: %v", err), zenity.Title("TimeChamp Setup"))
 		os.Exit(1)
 	}
-
 	if err := config.SaveIdentity(cfg.DataDir, orgID, employeeID); err != nil {
 		if progress != nil {
 			_ = progress.Close()
@@ -98,38 +103,54 @@ func main() {
 		os.Exit(1)
 	}
 
+	// ── Extract agent binary ──────────────────────────────────────────────────
+	if progress != nil {
+		_ = progress.Text("Installing agent…")
+		_ = progress.Value(75)
+	}
+
+	agentPath, extractErr := extractAgent(cfg.DataDir)
+	if extractErr != nil {
+		if progress != nil {
+			_ = progress.Close()
+		}
+		_ = zenity.Error(fmt.Sprintf("Failed to install agent: %v", extractErr), zenity.Title("TimeChamp Setup"))
+		os.Exit(1)
+	}
+
+	// ── Launch agent ──────────────────────────────────────────────────────────
 	if progress != nil {
 		_ = progress.Text("Starting agent…")
 		_ = progress.Value(90)
 	}
 
-	// ── Launch agent ──────────────────────────────────────────────────────────
-	agentBin := agentBinaryPath()
-	cmd := exec.Command(agentBin)
+	cmd := exec.Command(agentPath)
 	cmd.Env = append(os.Environ(), "TC_API_URL="+apiURL)
-	_ = cmd.Start() // best-effort; agent may not be alongside setup binary
+	_ = cmd.Start()
 
 	if progress != nil {
 		_ = progress.Value(100)
 		_ = progress.Close()
 	}
 
-	// ── Done ──────────────────────────────────────────────────────────────────
 	_ = zenity.Info(
-		"TimeChamp Agent is registered and running in the background.\n\nThis window will now close.",
+		"TimeChamp Agent is installed and running in the background.\n\nThis window will now close.",
 		zenity.Title("Setup Complete"),
 	)
 }
 
-// agentBinaryPath returns the path to the agent binary expected alongside this setup exe.
-func agentBinaryPath() string {
-	exe, err := os.Executable()
-	if err != nil {
-		return "timechamp-agent"
+// extractAgent writes the embedded agent binary to DataDir and returns its path.
+func extractAgent(dataDir string) (string, error) {
+	if err := os.MkdirAll(dataDir, 0700); err != nil {
+		return "", err
 	}
 	name := "timechamp-agent"
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
-	return filepath.Join(filepath.Dir(exe), name)
+	dest := filepath.Join(dataDir, name)
+	if err := os.WriteFile(dest, agentBinary, 0755); err != nil {
+		return "", err
+	}
+	return dest, nil
 }

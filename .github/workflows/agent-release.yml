@@ -9,17 +9,17 @@ permissions:
   contents: write
 
 jobs:
-  # ── Headless agent (CGO_ENABLED=0, cross-compiled on ubuntu) ───────────────
+  # ── Headless agent binaries (cross-compiled, CGO_ENABLED=0) ────────────────
   build-agent:
     name: Agent ${{ matrix.suffix }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
         include:
-          - { goos: linux,   goarch: amd64,  suffix: linux-amd64   }
-          - { goos: linux,   goarch: arm64,  suffix: linux-arm64   }
-          - { goos: darwin,  goarch: amd64,  suffix: darwin-amd64  }
-          - { goos: darwin,  goarch: arm64,  suffix: darwin-arm64  }
+          - { goos: linux,   goarch: amd64,  suffix: linux-amd64             }
+          - { goos: linux,   goarch: arm64,  suffix: linux-arm64             }
+          - { goos: darwin,  goarch: amd64,  suffix: darwin-amd64            }
+          - { goos: darwin,  goarch: arm64,  suffix: darwin-arm64            }
           - { goos: windows, goarch: amd64,  suffix: windows-amd64, ext: .exe }
 
     steps:
@@ -48,16 +48,16 @@ jobs:
           files: apps/agent/timechamp-agent-${{ matrix.suffix }}${{ matrix.ext || '' }}
           generate_release_notes: false
 
-  # ── GUI Setup wizard (needs native runner per OS for CGO/zenity) ───────────
+  # ── All-in-one setup installer (agent embedded inside setup exe) ────────────
   build-setup:
     name: Setup ${{ matrix.suffix }}
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
         include:
-          - { runner: windows-latest, goos: windows, suffix: windows-amd64, ext: .exe }
-          - { runner: macos-latest,   goos: darwin,  suffix: darwin-arm64             }
-          - { runner: ubuntu-latest,  goos: linux,   suffix: linux-amd64              }
+          - { runner: windows-latest, goos: windows, goarch: amd64, suffix: windows-amd64, ext: .exe, agent_ext: .exe }
+          - { runner: macos-latest,   goos: darwin,  goarch: arm64, suffix: darwin-arm64,  ext: '',   agent_ext: ''   }
+          - { runner: ubuntu-latest,  goos: linux,   goarch: amd64, suffix: linux-amd64,   ext: '',   agent_ext: ''   }
 
     steps:
       - uses: actions/checkout@v4
@@ -67,19 +67,35 @@ jobs:
           go-version: '1.22'
           cache-dependency-path: apps/agent/go.sum
 
-      - name: Build setup binary
+      - name: Build agent binary (to embed)
         shell: bash
         env:
           GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        run: |
+          cd apps/agent
+          go build \
+            -ldflags "-w -s -X main.Version=${{ github.ref_name }} -X main.BuildDate=$(date -u +%Y-%m-%d)" \
+            -o cmd/setup/agent_bin${{ matrix.agent_ext }} \
+            ./cmd/agent
+          # Rename to the fixed embed name
+          mv cmd/setup/agent_bin${{ matrix.agent_ext }} cmd/setup/agent_bin
+
+      - name: Build setup installer (with agent embedded)
+        shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: '0'
         run: |
           cd apps/agent
           go build \
             -ldflags "-w -s -X main.Version=${{ github.ref_name }}" \
-            -o timechamp-setup-${{ matrix.suffix }}${{ matrix.ext || '' }} \
+            -o timechamp-setup-${{ matrix.suffix }}${{ matrix.ext }} \
             ./cmd/setup
 
       - uses: softprops/action-gh-release@v2
         with:
-          files: apps/agent/timechamp-setup-${{ matrix.suffix }}${{ matrix.ext || '' }}
+          files: apps/agent/timechamp-setup-${{ matrix.suffix }}${{ matrix.ext }}
           generate_release_notes: false
