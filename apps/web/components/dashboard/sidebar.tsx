@@ -6,7 +6,7 @@ import { useSession } from 'next-auth/react'
 import { cn } from '@/lib/utils'
 import {
   LayoutDashboard, Monitor, Clock, Users, FolderKanban,
-  BarChart3, Settings, Radio, MapPin, Bell, Plug,
+  BarChart3, Settings, Radio, MapPin, Bell, Plug, Download,
 } from 'lucide-react'
 
 const NAV_ITEMS = [
@@ -21,6 +21,7 @@ const NAV_ITEMS = [
   { href: '/integrations',          label: 'Integrations',  icon: Plug            },
   { href: '/alerts',                label: 'Alerts',        icon: Bell            },
   { href: '/settings/organization', label: 'Settings',      icon: Settings        },
+  { href: '/settings/agent',        label: 'Agent Setup',   icon: Download        },
 ]
 
 export function Sidebar() {

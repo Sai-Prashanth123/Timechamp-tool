@@ -11,7 +11,9 @@ import { GpsLocation } from '../../database/entities/gps-location.entity';
 import { User } from '../../database/entities/user.entity';
 import { Organization } from '../../database/entities/organization.entity';
 import { AgentDevice } from '../../database/entities/agent-device.entity';
+import { AgentMetric } from '../../database/entities/agent-metric.entity';
 import { SyncActivityDto } from './dto/sync-activity.dto';
+import { SyncMetricsDto } from './dto/sync-metrics.dto';
 import { SyncScreenshotDto } from './dto/sync-screenshot.dto';
 import { SyncGpsDto } from './dto/sync-gps.dto';
 import { RegisterAgentDto } from './dto/register-agent.dto';
@@ -38,6 +40,8 @@ export class AgentService {
     private userRepo: Repository<User>,
     @InjectRepository(AgentDevice)
     private deviceRepo: Repository<AgentDevice>,
+    @InjectRepository(AgentMetric)
+    private metricsRepo: Repository<AgentMetric>,
     @Optional() @Inject('TOKEN_SERVICE') private tokenService: any,
     @Optional() @Inject(forwardRef(() => MonitoringGateway))
     private monitoringGateway: MonitoringGateway | undefined,
@@ -233,5 +237,28 @@ export class AgentService {
 
   async findDeviceByToken(token: string): Promise<AgentDevice | null> {
     return this.deviceRepo.findOne({ where: { deviceToken: token, isActive: true } });
+  }
+
+  async saveMetrics(dto: SyncMetricsDto): Promise<void> {
+    const records = dto.events.map((e) =>
+      this.metricsRepo.create({
+        employeeId: e.employeeId,
+        orgId: e.orgId,
+        cpuPercent: e.cpuPercent,
+        memUsedMb: e.memUsedMb,
+        memTotalMb: e.memTotalMb,
+        agentCpuPercent: e.agentCpuPercent,
+        agentMemMb: e.agentMemMb,
+        recordedAt: new Date(e.recordedAt),
+      }),
+    );
+    await this.metricsRepo.save(records);
+  }
+
+  async getDevicesForOrg(orgId: string): Promise<AgentDevice[]> {
+    return this.deviceRepo.find({
+      where: { organizationId: orgId },
+      order: { lastSeenAt: 'DESC' },
+    });
   }
 }

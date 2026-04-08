@@ -177,7 +177,7 @@ func (u *Uploader) FlushMetrics() (int, error) {
 		ids = append(ids, e.ID)
 	}
 
-	if err := u.client.Post("/agent/metrics", payload); err != nil {
+	if err := u.client.Post("/agent/sync/metrics", payload); err != nil {
 		return 0, err
 	}
 

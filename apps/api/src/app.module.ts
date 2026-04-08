@@ -41,6 +41,7 @@ import { ProjectsModule } from './modules/projects/projects.module';
 import { StreamSession } from './database/entities/stream-session.entity';
 import { StreamingModule } from './modules/streaming/streaming.module';
 import { AgentDevice } from './database/entities/agent-device.entity';
+import { AgentMetric } from './database/entities/agent-metric.entity';
 import { AuditLog } from './database/entities/audit-log.entity';
 import { AdminModule } from './modules/admin/admin.module';
 
@@ -113,6 +114,7 @@ import { AdminModule } from './modules/admin/admin.module';
           AlertEvent,
           StreamSession,
           AgentDevice,
+          AgentMetric,
           AuditLog,
         ],
         migrations: ['dist/database/migrations/*.js'],

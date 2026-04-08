@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(powershell.exe -Command \"Start-Process 'C:\\\\\\\\Program Files\\\\\\\\Docker\\\\\\\\Docker\\\\\\\\Docker Desktop.exe'\")",
+      "Bash(ls \"D:/Time champ-agent/apps/agent/\"*.exe)",
+      "Bash(go build:*)",
+      "Bash(python -c \"import sys; print\\(sys.version\\)\")",
+      "Bash(npx tsc:*)",
+      "Bash(npx jest:*)"
+    ]
+  }
+}

@@ -12,6 +12,7 @@ import { AgentService } from './agent.service';
 import { AgentAuthGuard } from './agent-auth.guard';
 import { AgentCurrentUser } from './agent-current-user.decorator';
 import { SyncActivityDto } from './dto/sync-activity.dto';
+import { SyncMetricsDto } from './dto/sync-metrics.dto';
 import { SyncScreenshotDto } from './dto/sync-screenshot.dto';
 import { SyncGpsDto } from './dto/sync-gps.dto';
 import { User } from '../../database/entities/user.entity';
@@ -87,6 +88,14 @@ export class AgentController {
   @ApiOperation({ summary: 'Update agent last_seen_at' })
   async heartbeat(@AgentCurrentUser() user: User) {
     await this.service.recordHeartbeat(user);
+    return { ok: true };
+  }
+
+  @Post('metrics')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Batch-upload system metrics snapshots from the desktop agent' })
+  async syncMetrics(@Body() dto: SyncMetricsDto) {
+    await this.service.saveMetrics(dto);
     return { ok: true };
   }
 }
