@@ -5,26 +5,8 @@ import { useLiveStatus, elapsedSince } from '@/hooks/use-monitoring';
 import { useTimesheets } from '@/hooks/use-time-tracking';
 import { useProjects } from '@/hooks/use-projects';
 import { useMonitoringStore } from '@/stores/monitoring-store';
-
-// ── Stat Card ──────────────────────────────────────────────────────────
-
-function StatCard({
-  label,
-  value,
-  sublabel,
-}: {
-  label: string;
-  value: string | number;
-  sublabel?: string;
-}) {
-  return (
-    <div className="rounded-lg border bg-white p-5 shadow-sm">
-      <p className="text-sm font-medium text-slate-500">{label}</p>
-      <p className="mt-1 text-3xl font-bold text-slate-900">{value}</p>
-      {sublabel && <p className="mt-1 text-xs text-slate-400">{sublabel}</p>}
-    </div>
-  );
-}
+import { StatCard } from '@/components/ui/stat-card';
+import { Users, Clock, Monitor, TrendingUp } from 'lucide-react';
 
 // ── Page ───────────────────────────────────────────────────────────────
 
@@ -54,27 +36,35 @@ export default function OverviewPage() {
     <>
       <Header title="Overview" />
       <div className="flex-1 p-6 space-y-6 max-w-7xl">
-        {/* Stats Row */}
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {/* Stats row */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
           <StatCard
-            label="Employees Online Now"
+            title="Active Employees"
             value={isLoading ? '...' : onlineCount}
-            sublabel="Currently clocked in"
+            icon={<Users className="w-4 h-4" />}
+            iconColor="bg-blue-500"
+            loading={isLoading}
           />
           <StatCard
-            label="Time Tracked Today"
+            title="Hours Tracked Today"
             value={isLoading ? '...' : timeTodayLabel}
-            sublabel="Across all clocked-in employees"
+            icon={<Clock className="w-4 h-4" />}
+            iconColor="bg-violet-500"
+            loading={isLoading}
           />
           <StatCard
-            label="Active Projects"
+            title="Active Projects"
             value={isLoading ? '...' : activeProjects}
-            sublabel="Projects in progress"
+            icon={<Monitor className="w-4 h-4" />}
+            iconColor="bg-emerald-500"
+            loading={isLoading}
           />
           <StatCard
-            label="Pending Approvals"
+            title="Pending Approvals"
             value={isLoading ? '...' : pendingTimesheets}
-            sublabel="Timesheets awaiting review"
+            icon={<TrendingUp className="w-4 h-4" />}
+            iconColor="bg-amber-500"
+            loading={isLoading}
           />
         </div>
 
