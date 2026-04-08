@@ -6,6 +6,26 @@ import { Attendance } from '../../database/entities/attendance.entity';
 import { TimeEntry } from '../../database/entities/time-entry.entity';
 import { RedisService } from '../../infrastructure/redis/redis.service';
 
+// ── App categorization sets ────────────────────────────────────────────────────
+const PRODUCTIVE_APPS = new Set([
+  'code', 'vscode', 'code.exe', 'webstorm', 'intellij', 'pycharm', 'goland',
+  'sublime', 'vim', 'neovim', 'emacs', 'terminal', 'iterm', 'hyper',
+  'figma', 'sketch', 'xd', 'photoshop', 'illustrator',
+  'chrome', 'firefox', 'safari', 'edge',
+  'slack', 'teams', 'zoom', 'meet', 'discord',
+  'excel', 'sheets', 'word', 'docs', 'powerpoint', 'notion', 'obsidian',
+  'jira', 'linear', 'asana', 'trello', 'github', 'gitlab',
+  'postman', 'insomnia', 'docker', 'kubectl',
+]);
+
+const UNPRODUCTIVE_APPS = new Set([
+  'youtube', 'netflix', 'hulu', 'disney', 'twitch', 'tiktok',
+  'facebook', 'instagram', 'twitter', 'reddit', 'snapchat',
+  'steam', 'epic games', 'battle.net', 'minecraft',
+  'spotify', 'vlc', 'itunes',
+  'solitaire', 'minesweeper',
+]);
+
 export type DailyProductivity = {
   date: string;       // YYYY-MM-DD
   score: number;      // 0–100
@@ -150,6 +170,161 @@ export class AnalyticsService {
 
     await this.redis.set(cacheKey, JSON.stringify(result), ttl);
     return result;
+  }
+
+  // ── SP7 new methods ──────────────────────────────────────────────────────────
+
+  categorizeApp(appName: string): 'productive' | 'unproductive' | 'neutral' {
+    const lower = appName.toLowerCase().replace('.exe', '').replace('.app', '').trim();
+    if (PRODUCTIVE_APPS.has(lower)) return 'productive';
+    if (UNPRODUCTIVE_APPS.has(lower)) return 'unproductive';
+    return 'neutral';
+  }
+
+  async getProductivityReport(
+    organizationId: string,
+    userId: string | undefined,
+    from: string,
+    to: string,
+  ): Promise<Array<{
+    date: string;
+    productiveMinutes: number;
+    unproductiveMinutes: number;
+    neutralMinutes: number;
+    totalMinutes: number;
+    topApps: Array<{ appName: string; minutes: number; category: string }>;
+  }>> {
+    const cacheKey = `analytics:report:${organizationId}:${userId ?? 'all'}:${from}:${to}`;
+    const cached = await this.redis.get(cacheKey);
+    if (cached) return JSON.parse(cached);
+
+    const where: any = { organizationId };
+    if (userId) where.userId = userId;
+
+    const activities = await this.activityRepo.find({ where }).catch(() => [] as ActivityEvent[]);
+
+    // Group by date
+    const byDate = new Map<string, {
+      productive: number;
+      unproductive: number;
+      neutral: number;
+      apps: Map<string, { minutes: number; category: string }>;
+    }>();
+
+    for (const act of activities) {
+      const dateStr = act.startedAt?.toISOString?.()?.slice(0, 10) ?? from;
+      const durationMinutes = Math.round((act.durationSec ?? 0) / 60);
+      const category = this.categorizeApp(act.appName ?? '');
+
+      if (!byDate.has(dateStr)) {
+        byDate.set(dateStr, { productive: 0, unproductive: 0, neutral: 0, apps: new Map() });
+      }
+      const day = byDate.get(dateStr)!;
+      if (category === 'productive') day.productive += durationMinutes;
+      else if (category === 'unproductive') day.unproductive += durationMinutes;
+      else day.neutral += durationMinutes;
+
+      const existing = day.apps.get(act.appName) ?? { minutes: 0, category };
+      existing.minutes += durationMinutes;
+      day.apps.set(act.appName, existing);
+    }
+
+    const result = Array.from(byDate.entries())
+      .map(([date, day]) => ({
+        date,
+        productiveMinutes: day.productive,
+        unproductiveMinutes: day.unproductive,
+        neutralMinutes: day.neutral,
+        totalMinutes: day.productive + day.unproductive + day.neutral,
+        topApps: Array.from(day.apps.entries())
+          .sort((a, b) => b[1].minutes - a[1].minutes)
+          .slice(0, 5)
+          .map(([appName, data]) => ({ appName, ...data })),
+      }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    await this.redis.set(cacheKey, JSON.stringify(result), 300);
+    return result;
+  }
+
+  async getOrgProductivitySummary(
+    organizationId: string,
+    from: string,
+    to: string,
+  ): Promise<Array<{
+    userId: string;
+    firstName: string;
+    lastName: string;
+    productivePercent: number;
+    totalHours: number;
+    topApp: string;
+  }>> {
+    const activities = await this.activityRepo.find({
+      where: { organizationId },
+      relations: ['user'],
+    }).catch(() => [] as ActivityEvent[]);
+
+    const byUser = new Map<string, {
+      productive: number;
+      total: number;
+      topApps: Map<string, number>;
+      user: any;
+    }>();
+
+    for (const act of activities) {
+      const uid = act.userId;
+      const mins = Math.round((act.durationSec ?? 0) / 60);
+      const cat = this.categorizeApp(act.appName ?? '');
+
+      if (!byUser.has(uid)) {
+        byUser.set(uid, { productive: 0, total: 0, topApps: new Map(), user: act.user });
+      }
+      const entry = byUser.get(uid)!;
+      entry.total += mins;
+      if (cat === 'productive') entry.productive += mins;
+      entry.topApps.set(act.appName, (entry.topApps.get(act.appName) ?? 0) + mins);
+    }
+
+    return Array.from(byUser.entries()).map(([userId, data]) => {
+      const topApp = Array.from(data.topApps.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'N/A';
+      return {
+        userId,
+        firstName: data.user?.firstName ?? '',
+        lastName: data.user?.lastName ?? '',
+        productivePercent: data.total > 0 ? Math.round((data.productive / data.total) * 100) : 0,
+        totalHours: Math.round((data.total / 60) * 10) / 10,
+        topApp,
+      };
+    });
+  }
+
+  async getProductivityHeatmap(
+    organizationId: string,
+    userId?: string,
+    weeks = 8,
+  ): Promise<Array<{ date: string; productiveMinutes: number; level: 0 | 1 | 2 | 3 | 4 }>> {
+    const to = new Date();
+    const from = new Date();
+    from.setDate(from.getDate() - weeks * 7);
+
+    const fromStr = from.toISOString().slice(0, 10);
+    const toStr = to.toISOString().slice(0, 10);
+
+    const report = await this.getProductivityReport(organizationId, userId, fromStr, toStr);
+
+    const days: Array<{ date: string; productiveMinutes: number; level: 0 | 1 | 2 | 3 | 4 }> = [];
+    const current = new Date(from);
+    const reportMap = new Map(report.map((r) => [r.date, r.productiveMinutes]));
+
+    while (current <= to) {
+      const dateStr = current.toISOString().slice(0, 10);
+      const mins = reportMap.get(dateStr) ?? 0;
+      const level: 0 | 1 | 2 | 3 | 4 = mins === 0 ? 0 : mins < 60 ? 1 : mins < 120 ? 2 : mins < 240 ? 3 : 4;
+      days.push({ date: dateStr, productiveMinutes: mins, level });
+      current.setDate(current.getDate() + 1);
+    }
+
+    return days;
   }
 
   /** RFC 4180 CSV field escaping */
