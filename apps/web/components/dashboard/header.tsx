@@ -11,6 +11,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { LogOut, Settings, ChevronDown } from 'lucide-react';
+import { NotificationBell } from './notification-bell';
 
 interface HeaderProps {
   title: string;
@@ -31,7 +32,9 @@ export function Header({ title }: HeaderProps) {
     <header className="h-16 border-b bg-white flex items-center justify-between px-6 shrink-0">
       <h2 className="text-lg font-semibold text-slate-800">{title}</h2>
 
-      <DropdownMenu>
+      <div className="flex items-center gap-2">
+        <NotificationBell />
+        <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
             variant="ghost"
@@ -68,6 +71,7 @@ export function Header({ title }: HeaderProps) {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      </div>
     </header>
   );
 }
