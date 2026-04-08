@@ -10,6 +10,9 @@ import { User } from '../../database/entities/user.entity';
 import { Organization } from '../../database/entities/organization.entity';
 import { RefreshToken } from '../../database/entities/refresh-token.entity';
 import { Subscription } from '../../database/entities/subscription.entity';
+import { TokenService } from '../../infrastructure/token/token.service';
+import { MailerService } from '../../infrastructure/mailer/mailer.service';
+import { RedisModule } from '../../infrastructure/redis/redis.module';
 
 @Module({
   imports: [
@@ -25,9 +28,10 @@ import { Subscription } from '../../database/entities/subscription.entity';
       }),
     }),
     TypeOrmModule.forFeature([User, Organization, RefreshToken, Subscription]),
+    RedisModule,
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy],
+  providers: [AuthService, JwtStrategy, TokenService, MailerService],
   exports: [AuthService, JwtModule],
 })
 export class AuthModule {}

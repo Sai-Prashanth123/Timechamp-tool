@@ -9,13 +9,19 @@ import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { randomBytes } from 'crypto';
 import { User, UserRole } from '../../database/entities/user.entity';
+import { Organization } from '../../database/entities/organization.entity';
 import { InviteUserDto } from './dto/invite-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { TokenService } from '../../infrastructure/token/token.service';
+import { MailerService } from '../../infrastructure/mailer/mailer.service';
 
 @Injectable()
 export class UsersService {
   constructor(
     @InjectRepository(User) private usersRepo: Repository<User>,
+    @InjectRepository(Organization) private orgsRepo: Repository<Organization>,
+    private tokenService: TokenService,
+    private mailerService: MailerService,
   ) {}
 
   async findAll(organizationId: string): Promise<User[]> {
@@ -62,7 +68,19 @@ export class UsersService {
       emailVerified: false,
     });
 
-    return this.usersRepo.save(user);
+    const savedUser = await this.usersRepo.save(user);
+
+    // Generate invite token and send email
+    const token = await this.tokenService.generate('invite', savedUser.id);
+    // Get the inviter's name for the email
+    const inviter = await this.usersRepo.findOne({ where: { id: invitedBy } });
+    const inviterName = inviter ? `${inviter.firstName} ${inviter.lastName}` : 'Your admin';
+    // Get the organization name
+    const organization = await this.orgsRepo.findOne({ where: { id: organizationId } });
+    const orgName = organization ? organization.name : 'your organization';
+    await this.mailerService.sendInviteEmail(savedUser.email, inviterName, orgName, token);
+
+    return savedUser;
   }
 
   async update(

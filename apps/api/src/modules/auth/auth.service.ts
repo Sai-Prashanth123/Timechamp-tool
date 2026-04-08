@@ -2,6 +2,8 @@ import {
   Injectable,
   ConflictException,
   UnauthorizedException,
+  BadRequestException,
+  NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
@@ -14,6 +16,8 @@ import { Organization } from '../../database/entities/organization.entity';
 import { RefreshToken } from '../../database/entities/refresh-token.entity';
 import { Subscription } from '../../database/entities/subscription.entity';
 import { RedisService } from '../../infrastructure/redis/redis.service';
+import { TokenService } from '../../infrastructure/token/token.service';
+import { MailerService } from '../../infrastructure/mailer/mailer.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { JwtPayload } from './strategies/jwt.strategy';
@@ -30,6 +34,8 @@ export class AuthService {
     private config: ConfigService,
     private redis: RedisService,
     private dataSource: DataSource,
+    private tokenService: TokenService,
+    private mailerService: MailerService,
   ) {}
 
   async register(dto: RegisterDto) {
@@ -133,6 +139,54 @@ export class AuthService {
     });
 
     return this.generateTokens(user);
+  }
+
+  async verifyEmail(token: string): Promise<void> {
+    const userId = await this.tokenService.consume('email-verify', token);
+    if (!userId) throw new BadRequestException('Invalid or expired verification token');
+    await this.usersRepo.update(userId, { emailVerified: true });
+  }
+
+  async resendVerification(userId: string): Promise<void> {
+    const user = await this.usersRepo.findOne({ where: { id: userId } });
+    if (!user) throw new NotFoundException('User not found');
+    if (user.emailVerified) return; // already verified, silently succeed
+    const token = await this.tokenService.generate('email-verify', userId);
+    await this.mailerService.sendVerificationEmail(user.email, token);
+  }
+
+  async forgotPassword(email: string): Promise<void> {
+    // Silently succeed even if email not found (prevent enumeration)
+    const user = await this.usersRepo.findOne({ where: { email } });
+    if (!user) return;
+    const token = await this.tokenService.generate('password-reset', user.id);
+    await this.mailerService.sendPasswordResetEmail(user.email, token);
+  }
+
+  async resetPassword(token: string, newPassword: string): Promise<void> {
+    const userId = await this.tokenService.consume('password-reset', token);
+    if (!userId) throw new BadRequestException('Invalid or expired reset token');
+    const hashed = await bcrypt.hash(newPassword, 12);
+    await this.usersRepo.update(userId, { passwordHash: hashed });
+    // Invalidate all refresh tokens for this user
+    await this.refreshTokensRepo.delete({ userId });
+  }
+
+  async acceptInvite(
+    token: string,
+    firstName: string,
+    lastName: string,
+    password: string,
+  ): Promise<void> {
+    const userId = await this.tokenService.consume('invite', token);
+    if (!userId) throw new BadRequestException('Invalid or expired invite token');
+    const hashed = await bcrypt.hash(password, 12);
+    await this.usersRepo.update(userId, {
+      firstName,
+      lastName,
+      passwordHash: hashed,
+      emailVerified: true,
+    });
   }
 
   private async generateTokens(user: User) {
