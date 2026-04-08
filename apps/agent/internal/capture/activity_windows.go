@@ -58,6 +58,7 @@ func getActiveWindow() (ActiveWindow, error) {
 		appName = "Unknown"
 	}
 
-	return ActiveWindow{AppName: appName, WindowTitle: title}, nil
+	url := getBrowserURL(appName)
+	return ActiveWindow{AppName: appName, WindowTitle: title, URL: url}, nil
 }
 

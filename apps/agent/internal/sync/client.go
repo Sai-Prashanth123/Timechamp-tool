@@ -2,9 +2,13 @@ package sync
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"time"
 )
@@ -12,9 +16,12 @@ import (
 const (
 	circuitOpenThreshold = 3 // consecutive failures before opening circuit
 	circuitResetAfter    = 5 * time.Minute
+	maxRetries           = 3
+	retryBaseDelay       = 2 * time.Second
 )
 
-// Client is an HTTP client for the TimeChamp API with a simple circuit breaker.
+// Client is an HTTP client for the TimeChamp API.
+// It includes a simple circuit breaker and optional TLS certificate pinning.
 type Client struct {
 	baseURL     string
 	token       string
@@ -22,17 +29,58 @@ type Client struct {
 	failures    int
 	openedAt    time.Time
 	circuitOpen bool
+	// pinnedCertSHA256 is the hex-encoded SHA-256 of the expected server certificate DER.
+	// Empty string disables pinning.
+	pinnedCertSHA256 string
+}
+
+// ClientOption configures a Client.
+type ClientOption func(*Client)
+
+// WithCertPin pins the TLS connection to a specific server certificate (SHA-256 of DER).
+func WithCertPin(sha256Hex string) ClientOption {
+	return func(c *Client) {
+		c.pinnedCertSHA256 = sha256Hex
+	}
 }
 
 // NewClient creates a new API client.
-func NewClient(baseURL, token string) *Client {
-	return &Client{
+func NewClient(baseURL, token string, opts ...ClientOption) *Client {
+	c := &Client{
 		baseURL: baseURL,
 		token:   token,
-		http: &http.Client{
-			Timeout: 30 * time.Second,
-		},
 	}
+	for _, opt := range opts {
+		opt(c)
+	}
+
+	transport := &http.Transport{
+		TLSHandshakeTimeout: 10 * time.Second,
+	}
+
+	if c.pinnedCertSHA256 != "" {
+		transport.TLSClientConfig = &tls.Config{
+			VerifyConnection: func(cs tls.ConnectionState) error {
+				if len(cs.PeerCertificates) == 0 {
+					return fmt.Errorf("tls pin: no peer certificates")
+				}
+				// Pin against the leaf certificate DER.
+				leaf := cs.PeerCertificates[0]
+				fingerprint := sha256.Sum256(leaf.Raw)
+				got := hex.EncodeToString(fingerprint[:])
+				if got != c.pinnedCertSHA256 {
+					return fmt.Errorf("tls pin: cert fingerprint mismatch (got %s, want %s)", got, c.pinnedCertSHA256)
+				}
+				return nil
+			},
+		}
+	}
+
+	c.http = &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: transport,
+	}
+	return c
 }
 
 // IsAvailable returns true if the circuit is closed (API reachable).
@@ -40,7 +88,6 @@ func (c *Client) IsAvailable() bool {
 	if !c.circuitOpen {
 		return true
 	}
-	// Half-open: retry after reset window
 	if time.Since(c.openedAt) > circuitResetAfter {
 		c.circuitOpen = false
 		c.failures = 0
@@ -49,7 +96,7 @@ func (c *Client) IsAvailable() bool {
 	return false
 }
 
-// Post sends a POST request with a JSON body to the given path.
+// Post sends a POST request with a JSON body. Retries with exponential backoff on 5xx.
 func (c *Client) Post(path string, body any) error {
 	if !c.IsAvailable() {
 		return fmt.Errorf("circuit open: API unavailable, retry after %s",
@@ -61,30 +108,45 @@ func (c *Client) Post(path string, body any) error {
 		return fmt.Errorf("marshal body: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, c.baseURL+path, bytes.NewReader(data))
-	if err != nil {
-		return fmt.Errorf("build request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := time.Duration(math.Pow(2, float64(attempt-1))) * retryBaseDelay
+			time.Sleep(delay)
+		}
 
-	resp, err := c.http.Do(req)
-	if err != nil {
-		c.recordFailure()
-		return fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body) // drain body
+		req, err := http.NewRequest(http.MethodPost, c.baseURL+path, bytes.NewReader(data))
+		if err != nil {
+			return fmt.Errorf("build request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+c.token)
+		req.Header.Set("X-Agent-Version", agentVersion)
 
-	if resp.StatusCode >= 500 {
-		c.recordFailure()
-		return fmt.Errorf("server error: %d", resp.StatusCode)
-	}
+		resp, err := c.http.Do(req)
+		if err != nil {
+			c.recordFailure()
+			lastErr = fmt.Errorf("request failed: %w", err)
+			continue
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
 
-	// Success — reset failure count
-	c.failures = 0
-	c.circuitOpen = false
-	return nil
+		if resp.StatusCode == 401 || resp.StatusCode == 403 {
+			// Auth error — no point retrying.
+			return fmt.Errorf("auth error: %d", resp.StatusCode)
+		}
+		if resp.StatusCode >= 500 {
+			c.recordFailure()
+			lastErr = fmt.Errorf("server error: %d", resp.StatusCode)
+			continue
+		}
+		// Success
+		c.failures = 0
+		c.circuitOpen = false
+		return nil
+	}
+	return lastErr
 }
 
 // PutPresigned sends a PUT request to a presigned S3 URL with binary body.
@@ -102,7 +164,7 @@ func (c *Client) PutPresigned(url string, data []byte, contentType string) error
 	defer resp.Body.Close()
 	io.Copy(io.Discard, resp.Body)
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("S3 upload status: %d", resp.StatusCode)
 	}
 	return nil
@@ -115,6 +177,7 @@ func (c *Client) GetPresignedUploadURL(filename string) (uploadURL, s3Key string
 		return "", "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("X-Agent-Version", agentVersion)
 
 	q := req.URL.Query()
 	q.Set("filename", filename)
@@ -154,6 +217,7 @@ func (c *Client) FetchOrgConfig() (*OrgStreamConfig, error) {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("X-Agent-Version", agentVersion)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -177,3 +241,6 @@ func (c *Client) recordFailure() {
 		c.openedAt = time.Now()
 	}
 }
+
+// agentVersion is embedded at build time via -ldflags "-X ...agentVersion=x.y.z".
+var agentVersion = "dev"

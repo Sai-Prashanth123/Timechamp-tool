@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "Time Champ Activity Tracker",
+  "version": "1.0.0",
+  "description": "Relays current tab URL to the Time Champ desktop agent via Native Messaging.",
+
+  "permissions": [
+    "tabs",
+    "activeTab",
+    "nativeMessaging"
+  ],
+
+  "host_permissions": [
+    "<all_urls>"
+  ],
+
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+
+  "icons": {
+    "16":  "icons/icon16.png",
+    "48":  "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

@@ -1,12 +1,17 @@
 package main
 
 import (
+	"encoding/binary"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -14,17 +19,43 @@ import (
 	"github.com/timechamp/agent/internal/capture"
 	"github.com/timechamp/agent/internal/config"
 	"github.com/timechamp/agent/internal/keychain"
+	"github.com/timechamp/agent/internal/service"
 	"github.com/timechamp/agent/internal/stream"
 	agentsync "github.com/timechamp/agent/internal/sync"
+	"github.com/timechamp/agent/internal/updater"
 )
+
+// Build-time variables injected by -ldflags.
+var (
+	Version   = "dev"
+	BuildDate = "unknown"
+)
+
+// urlCache is an atomic string holding the latest URL pushed from the browser
+// extension native host. It is written by the URL listener goroutine and read
+// by the activity loop.
+var urlCache atomic.Value // stores string
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
 	log.SetPrefix("[agent] ")
 
-	cfg := config.Load()
+	// When launched by Windows SCM, run in service mode.
+	if service.IsWindowsService() {
+		if err := service.RunAsService(run); err != nil {
+			log.Fatalf("service run failed: %v", err)
+		}
+		return
+	}
 
-	// Load saved identity (orgID + employeeID) from previous registration
+	run()
+}
+
+func run() {
+	cfg := config.Load()
+	log.Printf("Time Champ Agent %s (%s)", Version, BuildDate)
+
+	// Load saved identity (orgID + employeeID) from previous registration.
 	identity, err := config.LoadIdentity(cfg.DataDir)
 	if err != nil {
 		log.Printf("Warning: could not load identity: %v", err)
@@ -32,10 +63,9 @@ func main() {
 	cfg.OrgID = identity.OrgID
 	cfg.EmployeeID = identity.EmployeeID
 
-	// Load auth token from OS keychain
+	// Load auth token from OS keychain.
 	token, err := keychain.LoadToken()
 	if err != nil || token == "" {
-		// First run: check for invite token in env (set by installer)
 		inviteToken := os.Getenv("TC_INVITE_TOKEN")
 		if inviteToken == "" {
 			log.Fatal("No auth token found. Run installer with TC_INVITE_TOKEN set.")
@@ -52,7 +82,6 @@ func main() {
 		if saveErr := keychain.SaveToken(regToken); saveErr != nil {
 			log.Fatalf("Failed to save token: %v", saveErr)
 		}
-
 		if saveErr := config.SaveIdentity(cfg.DataDir, orgID, employeeID); saveErr != nil {
 			log.Fatalf("Failed to save identity: %v", saveErr)
 		}
@@ -63,26 +92,31 @@ func main() {
 		log.Printf("Agent registered for org %s employee %s", orgID, employeeID)
 	}
 
-	// Open local SQLite buffer
+	// Optional TLS certificate pinning (set TC_TLS_PIN env to a SHA-256 hex fingerprint).
+	var clientOpts []agentsync.ClientOption
+	if pin := os.Getenv("TC_TLS_PIN"); pin != "" {
+		clientOpts = append(clientOpts, agentsync.WithCertPin(pin))
+	}
+
+	// Open local SQLite buffer.
 	db, err := buffer.Open(cfg.DataDir)
 	if err != nil {
 		log.Fatalf("Failed to open buffer: %v", err)
 	}
 	defer db.Close()
 
-	client := agentsync.NewClient(cfg.APIURL, token)
+	client := agentsync.NewClient(cfg.APIURL, token, clientOpts...)
 	uploader := agentsync.NewUploader(client, db)
 
 	screenshotsDir := filepath.Join(cfg.DataDir, "screenshots")
 
-	// Start streaming if enabled (config may be overridden by org-level settings)
+	// Fetch org config (streaming, screenshot interval).
 	orgCfg, _ := client.FetchOrgConfig()
 	streamingEnabled := cfg.StreamingEnabled
 	cameraEnabled := cfg.CameraEnabled
 	audioEnabled := cfg.AudioEnabled
 	maxStreamFPS := cfg.MaxStreamFPS
 	if orgCfg != nil {
-		// Org-level settings take precedence when present
 		if orgCfg.StreamingEnabled {
 			streamingEnabled = true
 		}
@@ -112,30 +146,54 @@ func main() {
 			cfg.StreamingURL, cameraEnabled, audioEnabled, maxStreamFPS)
 	}
 
+	// Start URL listener for browser extension native messaging host.
+	urlCache.Store("")
+	go listenBrowserURLs()
+
+	// Background auto-update check (once per hour).
+	if Version != "dev" {
+		go func() {
+			ticker := time.NewTicker(1 * time.Hour)
+			defer ticker.Stop()
+			for range ticker.C {
+				if err := updater.CheckAndApply(updater.Config{
+					CurrentVersion: Version,
+					Repo:           "timechamp/agent",
+					PublicKeyPEM:   updaterPublicKey,
+					DataDir:        cfg.DataDir,
+				}); err != nil {
+					log.Printf("Auto-update check: %v", err)
+				}
+			}
+		}()
+	}
+
 	log.Printf("Agent started. Screenshot every %ds, sync every %ds",
 		cfg.ScreenshotInterval, cfg.SyncInterval)
 
-	// Tickers
+	// Tickers.
 	screenshotTicker := time.NewTicker(time.Duration(cfg.ScreenshotInterval) * time.Second)
-	syncTicker := time.NewTicker(time.Duration(cfg.SyncInterval) * time.Second)
-	activityTicker := time.NewTicker(10 * time.Second)
-	inputTicker := time.NewTicker(60 * time.Second)
-	pruneTicker := time.NewTicker(24 * time.Hour)
+	syncTicker       := time.NewTicker(time.Duration(cfg.SyncInterval) * time.Second)
+	activityTicker   := time.NewTicker(10 * time.Second)
+	inputTicker      := time.NewTicker(60 * time.Second)
+	metricsTicker    := time.NewTicker(60 * time.Second) // collect metrics every minute
+	pruneTicker      := time.NewTicker(24 * time.Hour)
 
 	defer screenshotTicker.Stop()
 	defer syncTicker.Stop()
 	defer activityTicker.Stop()
 	defer inputTicker.Stop()
+	defer metricsTicker.Stop()
 	defer pruneTicker.Stop()
 
-	// Input counter (goroutine-safe)
 	inputCounter := &capture.InputCounter{}
 
-	// Track current window for activity session
-	var currentWindow capture.ActiveWindow
-	var windowStarted time.Time
+	var (
+		currentWindow capture.ActiveWindow
+		windowStarted time.Time
+	)
 
-	// Graceful shutdown
+	// Graceful shutdown.
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
 
@@ -144,7 +202,6 @@ func main() {
 
 		case <-quit:
 			log.Println("Shutdown signal received, flushing buffer...")
-			// Flush current window session
 			if currentWindow.AppName != "" {
 				_ = db.InsertActivity(buffer.ActivityEvent{
 					EmployeeID:  cfg.EmployeeID,
@@ -156,12 +213,10 @@ func main() {
 					EndedAt:     time.Now(),
 				})
 			}
-			// Final sync before exit — flush all buffered data to the API.
 			_, _ = uploader.FlushActivity()
 			_, _ = uploader.FlushKeystrokes()
 			_, _ = uploader.FlushScreenshots()
-			// Brief pause to allow the stream manager to drain its send buffer
-			// before the deferred sm.Stop() closes the WebSocket connection.
+			_, _ = uploader.FlushMetrics()
 			time.Sleep(2 * time.Second)
 			log.Println("Shutting down agent.")
 			return
@@ -172,10 +227,13 @@ func main() {
 				continue
 			}
 
-			// Detect idle
+			// Overlay URL from browser extension cache if available.
+			if extURL := urlCache.Load().(string); extURL != "" && win.URL == "" {
+				win.URL = extURL
+			}
+
 			idle, _ := capture.IdleSeconds()
 			if idle >= cfg.IdleThreshold {
-				// Record end of current session if one was active
 				if currentWindow.AppName != "" {
 					_ = db.InsertActivity(buffer.ActivityEvent{
 						EmployeeID:  cfg.EmployeeID,
@@ -191,7 +249,6 @@ func main() {
 				continue
 			}
 
-			// Window changed — close old session, open new
 			if win.AppName != currentWindow.AppName || win.WindowTitle != currentWindow.WindowTitle {
 				if currentWindow.AppName != "" {
 					_ = db.InsertActivity(buffer.ActivityEvent{
@@ -206,12 +263,15 @@ func main() {
 				}
 				currentWindow = win
 				windowStarted = time.Now()
+			} else if win.URL != "" && win.URL != currentWindow.URL {
+				// URL changed within the same window (in-page navigation).
+				currentWindow.URL = win.URL
 			}
 
 		case <-screenshotTicker.C:
 			idle, _ := capture.IdleSeconds()
 			if idle >= cfg.IdleThreshold {
-				continue // skip screenshot when idle
+				continue
 			}
 
 			path, err := capture.CaptureScreenshot(screenshotsDir)
@@ -239,6 +299,26 @@ func main() {
 				})
 			}
 
+		case <-metricsTicker.C:
+			m, err := capture.GetSystemMetrics()
+			if err != nil {
+				log.Printf("Metrics capture error: %v", err)
+				continue
+			}
+			_ = db.InsertMetrics(buffer.SystemMetricsEvent{
+				EmployeeID:      cfg.EmployeeID,
+				OrgID:           cfg.OrgID,
+				CPUPercent:      m.CPUPercent,
+				MemUsedMB:       m.MemUsedMB,
+				MemTotalMB:      m.MemTotalMB,
+				AgentCPUPercent: m.AgentCPUPercent,
+				AgentMemMB:      m.AgentMemMB,
+				RecordedAt:      time.Now(),
+			})
+			if m.AgentMemMB > 100 {
+				log.Printf("Warning: agent RAM usage %d MiB exceeds 100 MiB target", m.AgentMemMB)
+			}
+
 		case <-syncTicker.C:
 			if !client.IsAvailable() {
 				continue
@@ -246,12 +326,13 @@ func main() {
 			n1, err1 := uploader.FlushActivity()
 			n2, err2 := uploader.FlushKeystrokes()
 			n3, err3 := uploader.FlushScreenshots()
-			if err1 != nil || err2 != nil || err3 != nil {
-				log.Printf("Sync errors: activity=%v keystrokes=%v screenshots=%v",
-					err1, err2, err3)
-			} else {
-				log.Printf("Synced: %d activity, %d keystrokes, %d screenshots",
-					n1, n2, n3)
+			n4, err4 := uploader.FlushMetrics()
+			if err1 != nil || err2 != nil || err3 != nil || err4 != nil {
+				log.Printf("Sync errors: activity=%v keystrokes=%v screenshots=%v metrics=%v",
+					err1, err2, err3, err4)
+			} else if n1+n2+n3+n4 > 0 {
+				log.Printf("Synced: %d activity, %d keystrokes, %d screenshots, %d metrics",
+					n1, n2, n3, n4)
 			}
 
 		case <-pruneTicker.C:
@@ -262,6 +343,59 @@ func main() {
 	}
 }
 
+// listenBrowserURLs starts a local TCP listener for the native messaging host.
+// It updates urlCache whenever a URL message arrives.
+func listenBrowserURLs() {
+	ln, err := net.Listen("tcp", "127.0.0.1:27182")
+	if err != nil {
+		// Port may be in use by another agent instance — that's OK.
+		log.Printf("URL listener: %v (browser extension URLs will use native capture)", err)
+		return
+	}
+	defer ln.Close()
+
+	type urlMsg struct {
+		Type string `json:"type"`
+		URL  string `json:"url,omitempty"`
+	}
+
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		go func(c net.Conn) {
+			defer c.Close()
+			c.SetReadDeadline(time.Now().Add(2 * time.Second))
+
+			var length uint32
+			if err := binary.Read(c, binary.LittleEndian, &length); err != nil {
+				return
+			}
+			if length > 4096 {
+				return
+			}
+			buf := make([]byte, length)
+			if _, err := io.ReadFull(c, buf); err != nil {
+				return
+			}
+			var msg urlMsg
+			if err := json.Unmarshal(buf, &msg); err != nil {
+				return
+			}
+			if msg.Type == "url" && msg.URL != "" {
+				urlCache.Store(msg.URL)
+			}
+		}(conn)
+	}
+}
+
 func osVersion() string {
 	return fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)
 }
+
+// updaterPublicKey is the ECDSA-P256 PEM public key used to verify update binaries.
+// Replace with your actual key before shipping production builds.
+const updaterPublicKey = `-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEPLACE_HOLDER_REPLACE_WITH_REAL_KEY==
+-----END PUBLIC KEY-----`

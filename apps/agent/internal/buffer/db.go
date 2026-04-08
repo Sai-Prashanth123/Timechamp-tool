@@ -78,9 +78,23 @@ func (db *DB) migrate() error {
 			synced          INTEGER NOT NULL DEFAULT 0
 		);
 
+		CREATE TABLE IF NOT EXISTS system_metrics (
+			id                INTEGER PRIMARY KEY AUTOINCREMENT,
+			employee_id        TEXT NOT NULL,
+			org_id             TEXT NOT NULL,
+			cpu_percent        REAL NOT NULL DEFAULT 0,
+			mem_used_mb        INTEGER NOT NULL DEFAULT 0,
+			mem_total_mb       INTEGER NOT NULL DEFAULT 0,
+			agent_cpu_percent  REAL NOT NULL DEFAULT 0,
+			agent_mem_mb       INTEGER NOT NULL DEFAULT 0,
+			recorded_at        DATETIME NOT NULL,
+			synced             INTEGER NOT NULL DEFAULT 0
+		);
+
 		CREATE INDEX IF NOT EXISTS idx_activity_synced ON activity_events(synced);
 		CREATE INDEX IF NOT EXISTS idx_screenshots_synced ON screenshots(synced);
 		CREATE INDEX IF NOT EXISTS idx_keystrokes_synced ON keystroke_events(synced);
+		CREATE INDEX IF NOT EXISTS idx_metrics_synced ON system_metrics(synced);
 	`)
 	return err
 }

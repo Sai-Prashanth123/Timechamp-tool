@@ -30,8 +30,12 @@ func getActiveWindow() (ActiveWindow, error) {
 
 	line := strings.TrimSpace(string(out))
 	parts := strings.SplitN(line, "|", 2)
+	appName := line
+	windowTitle := ""
 	if len(parts) == 2 {
-		return ActiveWindow{AppName: parts[0], WindowTitle: parts[1]}, nil
+		appName = parts[0]
+		windowTitle = parts[1]
 	}
-	return ActiveWindow{AppName: line, WindowTitle: ""}, nil
+	url := getBrowserURL(appName)
+	return ActiveWindow{AppName: appName, WindowTitle: windowTitle, URL: url}, nil
 }

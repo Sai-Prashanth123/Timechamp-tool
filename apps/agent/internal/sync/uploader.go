@@ -10,6 +10,23 @@ import (
 
 const batchSize = 100
 
+// MetricsPayload is the JSON structure sent to the API.
+type MetricsPayload struct {
+	Events []MetricsEventDTO `json:"events"`
+}
+
+// MetricsEventDTO is the API wire format for one metrics snapshot.
+type MetricsEventDTO struct {
+	EmployeeID      string    `json:"employeeId"`
+	OrgID           string    `json:"orgId"`
+	CPUPercent      float64   `json:"cpuPercent"`
+	MemUsedMB       uint64    `json:"memUsedMb"`
+	MemTotalMB      uint64    `json:"memTotalMb"`
+	AgentCPUPercent float64   `json:"agentCpuPercent"`
+	AgentMemMB      uint64    `json:"agentMemMb"`
+	RecordedAt      time.Time `json:"recordedAt"`
+}
+
 // Uploader flushes the local SQLite buffer to the TimeChamp API.
 type Uploader struct {
 	client *Client
@@ -124,6 +141,43 @@ func (u *Uploader) FlushKeystrokes() (int, error) {
 	}
 
 	return len(events), u.db.MarkKeystrokesSynced(ids)
+}
+
+// FlushMetrics uploads all unsynced system metrics snapshots.
+func (u *Uploader) FlushMetrics() (int, error) {
+	if !u.client.IsAvailable() {
+		return 0, nil
+	}
+
+	events, err := u.db.ListUnsyncedMetrics(batchSize)
+	if err != nil {
+		return 0, err
+	}
+	if len(events) == 0 {
+		return 0, nil
+	}
+
+	payload := MetricsPayload{}
+	ids := make([]int64, 0, len(events))
+	for _, e := range events {
+		payload.Events = append(payload.Events, MetricsEventDTO{
+			EmployeeID:      e.EmployeeID,
+			OrgID:           e.OrgID,
+			CPUPercent:      e.CPUPercent,
+			MemUsedMB:       e.MemUsedMB,
+			MemTotalMB:      e.MemTotalMB,
+			AgentCPUPercent: e.AgentCPUPercent,
+			AgentMemMB:      e.AgentMemMB,
+			RecordedAt:      e.RecordedAt,
+		})
+		ids = append(ids, e.ID)
+	}
+
+	if err := u.client.Post("/agent/metrics", payload); err != nil {
+		return 0, err
+	}
+
+	return len(events), u.db.MarkMetricsSynced(ids)
 }
 
 // FlushScreenshots uploads all unsynced screenshots via presigned S3 URLs.

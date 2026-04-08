@@ -172,6 +172,64 @@ func (db *DB) MarkKeystrokesSynced(ids []int64) error {
 	return nil
 }
 
+// SystemMetricsEvent is a point-in-time resource snapshot.
+type SystemMetricsEvent struct {
+	ID              int64
+	EmployeeID      string
+	OrgID           string
+	CPUPercent      float64
+	MemUsedMB       uint64
+	MemTotalMB      uint64
+	AgentCPUPercent float64
+	AgentMemMB      uint64
+	RecordedAt      time.Time
+	Synced          bool
+}
+
+// InsertMetrics stores a system metrics snapshot.
+func (db *DB) InsertMetrics(e SystemMetricsEvent) error {
+	_, err := db.conn.Exec(
+		`INSERT INTO system_metrics (employee_id, org_id, cpu_percent, mem_used_mb, mem_total_mb, agent_cpu_percent, agent_mem_mb, recorded_at, synced)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+		e.EmployeeID, e.OrgID, e.CPUPercent, e.MemUsedMB, e.MemTotalMB,
+		e.AgentCPUPercent, e.AgentMemMB, e.RecordedAt.UTC(),
+	)
+	return err
+}
+
+// ListUnsyncedMetrics returns up to limit unsynced metrics records.
+func (db *DB) ListUnsyncedMetrics(limit int) ([]SystemMetricsEvent, error) {
+	rows, err := db.conn.Query(
+		`SELECT id, employee_id, org_id, cpu_percent, mem_used_mb, mem_total_mb, agent_cpu_percent, agent_mem_mb, recorded_at
+		 FROM system_metrics WHERE synced = 0 ORDER BY id ASC LIMIT ?`, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var events []SystemMetricsEvent
+	for rows.Next() {
+		var e SystemMetricsEvent
+		if err := rows.Scan(&e.ID, &e.EmployeeID, &e.OrgID, &e.CPUPercent,
+			&e.MemUsedMB, &e.MemTotalMB, &e.AgentCPUPercent, &e.AgentMemMB, &e.RecordedAt); err != nil {
+			return nil, err
+		}
+		events = append(events, e)
+	}
+	return events, rows.Err()
+}
+
+// MarkMetricsSynced deletes the given metrics record IDs.
+func (db *DB) MarkMetricsSynced(ids []int64) error {
+	for _, id := range ids {
+		if _, err := db.conn.Exec(`DELETE FROM system_metrics WHERE id = ?`, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // PruneSynced removes records older than maxDays days that have already been
 // synced (deleted) or are too old to be useful. Since synced records are
 // deleted immediately, this removes old unsynced records that can no longer
@@ -182,6 +240,7 @@ func (db *DB) PruneSynced(maxDays int) error {
 		{"activity_events", "started_at"},
 		{"screenshots", "captured_at"},
 		{"keystroke_events", "recorded_at"},
+		{"system_metrics", "recorded_at"},
 	}
 	for _, q := range queries {
 		_, err := db.conn.Exec(
