@@ -19,6 +19,7 @@ import { ClockOutDto } from './dto/clock-out.dto';
 import { ManualEntryDto } from './dto/manual-entry.dto';
 import { DateRangeQueryDto } from './dto/date-range-query.dto';
 import { UserRole } from '../../database/entities/user.entity';
+import { AuditLogService } from '../admin/audit-log.service';
 
 @Injectable()
 export class TimeTrackingService {
@@ -29,6 +30,7 @@ export class TimeTrackingService {
     private timeEntryRepo: Repository<TimeEntry>,
     @InjectRepository(Timesheet)
     private timesheetRepo: Repository<Timesheet>,
+    private auditLogService: AuditLogService,
   ) {}
 
   // ── Clock In ──────────────────────────────────────────────────────────
@@ -262,7 +264,17 @@ export class TimeTrackingService {
     sheet.status = TimesheetStatus.APPROVED;
     sheet.approvedBy = approverId;
     sheet.approvedAt = new Date();
-    return this.timesheetRepo.save(sheet);
+    const saved = await this.timesheetRepo.save(sheet);
+
+    void this.auditLogService.log(
+      organizationId,
+      { id: approverId, email: '' },
+      'timesheet.approved',
+      'timesheet',
+      timesheetId,
+    );
+
+    return saved;
   }
 
   async rejectTimesheet(
@@ -283,7 +295,18 @@ export class TimeTrackingService {
 
     sheet.status = TimesheetStatus.REJECTED;
     sheet.rejectionNote = rejectionNote;
-    return this.timesheetRepo.save(sheet);
+    const saved = await this.timesheetRepo.save(sheet);
+
+    void this.auditLogService.log(
+      organizationId,
+      { id: approverId, email: '' },
+      'timesheet.rejected',
+      'timesheet',
+      timesheetId,
+      { rejectionNote },
+    );
+
+    return saved;
   }
 
   // ── Team status (manager/admin) ────────────────────────────────────────

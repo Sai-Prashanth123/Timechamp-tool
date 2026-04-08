@@ -41,6 +41,8 @@ import { ProjectsModule } from './modules/projects/projects.module';
 import { StreamSession } from './database/entities/stream-session.entity';
 import { StreamingModule } from './modules/streaming/streaming.module';
 import { AgentDevice } from './database/entities/agent-device.entity';
+import { AuditLog } from './database/entities/audit-log.entity';
+import { AdminModule } from './modules/admin/admin.module';
 
 @Module({
   imports: [
@@ -111,6 +113,7 @@ import { AgentDevice } from './database/entities/agent-device.entity';
           AlertEvent,
           StreamSession,
           AgentDevice,
+          AuditLog,
         ],
         migrations: ['dist/database/migrations/*.js'],
         migrationsRun: config.get('NODE_ENV') !== 'production',
@@ -138,6 +141,7 @@ import { AgentDevice } from './database/entities/agent-device.entity';
     AlertsModule,
     MaintenanceModule,
     StreamingModule,
+    AdminModule,
   ],
 })
 export class AppModule implements NestModule {
