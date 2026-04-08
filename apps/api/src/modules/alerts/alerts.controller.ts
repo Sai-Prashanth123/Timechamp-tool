@@ -100,7 +100,7 @@ export class AlertsController {
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
   @ApiOperation({ summary: 'List alert rules for the org (admin/manager)' })
   listRules(@CurrentUser() user: User) {
-    return this.service.listRules(user.organizationId);
+    return this.service.getRules(user.organizationId);
   }
 
   @Post('rules')
@@ -108,7 +108,11 @@ export class AlertsController {
   @ApiOperation({ summary: 'Create an alert rule (admin only)' })
   @ApiBody({ type: CreateAlertRuleDto })
   createRule(@CurrentUser() user: User, @Body() dto: CreateAlertRuleDto) {
-    return this.service.createRule(user.organizationId, dto);
+    return this.service.createRule(user.organizationId, {
+      name: dto.name,
+      type: dto.metric,
+      threshold: dto.thresholdMinutes ?? 30,
+    });
   }
 
   @Patch('rules/:id')
@@ -120,7 +124,11 @@ export class AlertsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateAlertRuleDto,
   ) {
-    return this.service.updateRule(id, user.organizationId, dto);
+    return this.service.updateRule(id, {
+      name: dto.name,
+      threshold: dto.thresholdMinutes,
+      enabled: dto.isActive,
+    });
   }
 
   @Delete('rules/:id')
@@ -131,7 +139,7 @@ export class AlertsController {
     @CurrentUser() user: User,
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<void> {
-    await this.service.deleteRule(id, user.organizationId);
+    await this.service.deleteRule(id);
   }
 
   // ── Events ─────────────────────────────────────────────────────────
@@ -144,7 +152,7 @@ export class AlertsController {
     @Query('limit') limit?: string,
   ) {
     const parsedLimit = limit ? parseInt(limit, 10) : 50;
-    return this.service.listEvents(user.organizationId, parsedLimit);
+    return this.service.getEvents(user.organizationId, undefined, parsedLimit);
   }
 
   @Post('events/:id/acknowledge')
@@ -154,6 +162,6 @@ export class AlertsController {
     @CurrentUser() user: User,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
-    return this.service.acknowledgeEvent(id, user.organizationId, user.id);
+    return this.service.markSeen(id);
   }
 }
