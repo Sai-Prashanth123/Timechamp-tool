@@ -252,3 +252,78 @@ export function getWeekStart(date: Date = new Date()): string {
   d.setDate(d.getDate() + diff);
   return d.toISOString().slice(0, 10);
 }
+
+// ── Team Timesheets (manager/admin) ────────────────────────────────────
+
+export type TeamTimesheet = Timesheet & {
+  user: { id: string; firstName: string; lastName: string; email: string };
+};
+
+export function useTeamTimesheets(params?: { weekStart?: string; status?: string }) {
+  return useQuery({
+    queryKey: ['team-timesheets', params],
+    queryFn: async () => {
+      const { data } = await api.get('/time-tracking/team/timesheets', { params });
+      return data.data as TeamTimesheet[];
+    },
+  });
+}
+
+// ── Payroll Report (admin) ─────────────────────────────────────────────
+
+export type PayrollRow = {
+  userId: string;
+  firstName: string;
+  lastName: string;
+  weekStart: string;
+  totalMinutes: number;
+  overtimeMinutes: number;
+  status: string;
+};
+
+export function usePayrollReport(params?: { from?: string; to?: string }) {
+  return useQuery({
+    queryKey: ['payroll-report', params],
+    queryFn: async () => {
+      const { data } = await api.get('/time-tracking/report', { params });
+      return data.data as PayrollRow[];
+    },
+    enabled: !!(params?.from && params?.to),
+  });
+}
+
+/** Opens a browser download for the payroll CSV */
+export function downloadPayrollCsv(from: string, to: string, token: string): void {
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3000';
+  const url = `${apiUrl}/time-tracking/export?from=${from}&to=${to}`;
+  const a = document.createElement('a');
+  a.href = url;
+  a.setAttribute('download', `payroll-${from}-${to}.csv`);
+  fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+    .then((res) => res.blob())
+    .then((blob) => {
+      const objectUrl = URL.createObjectURL(blob);
+      a.href = objectUrl;
+      a.click();
+      URL.revokeObjectURL(objectUrl);
+    });
+}
+
+// ── Bulk Approve ────────────────────────────────────────────────────────
+
+export function useBulkApproveTimesheets() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (ids: string[]) => {
+      await Promise.all(
+        ids.map((id) => api.post(`/time-tracking/timesheets/${id}/approve`)),
+      );
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['team-timesheets'] });
+      queryClient.invalidateQueries({ queryKey: ['timesheets'] });
+      toast.success('Timesheets approved');
+    },
+    onError: () => toast.error('Failed to approve some timesheets'),
+  });
+}
