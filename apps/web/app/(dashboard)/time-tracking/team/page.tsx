@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { Header } from '@/components/dashboard/header';
 import {
@@ -110,8 +110,8 @@ export default function TeamTimesheetsPage() {
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {timesheets.map((ts) => (
-                      <>
-                        <tr key={ts.id}>
+                      <React.Fragment key={ts.id}>
+                        <tr>
                           <td className="py-3 pr-4 font-medium text-slate-800">
                             {ts.user.firstName} {ts.user.lastName}
                           </td>
@@ -152,7 +152,7 @@ export default function TeamTimesheetsPage() {
                             </td>
                           </tr>
                         )}
-                      </>
+                      </React.Fragment>
                     ))}
                   </tbody>
                 </table>

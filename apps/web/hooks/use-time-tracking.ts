@@ -197,6 +197,7 @@ export function useApproveTimesheet() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['timesheets'] });
+      queryClient.invalidateQueries({ queryKey: ['team-timesheets'] });
       toast.success('Timesheet approved');
     },
     onError: (err: unknown) => {
@@ -225,6 +226,7 @@ export function useRejectTimesheet() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['timesheets'] });
+      queryClient.invalidateQueries({ queryKey: ['team-timesheets'] });
       toast.success('Timesheet rejected');
     },
     onError: (err: unknown) => {

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { Header } from '@/components/dashboard/header';
 import {
@@ -77,8 +77,8 @@ export default function ApprovalsPage() {
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {pending.map((ts) => (
-                      <>
-                        <tr key={ts.id}>
+                      <React.Fragment key={ts.id}>
+                        <tr>
                           <td className="py-3 pr-4 font-medium text-slate-800">{ts.user.firstName} {ts.user.lastName}</td>
                           <td className="py-3 pr-4 text-slate-600">{ts.weekStart}</td>
                           <td className="py-3 pr-4 text-slate-600">{formatMinutes(ts.totalMinutes)}</td>
@@ -103,7 +103,7 @@ export default function ApprovalsPage() {
                             </td>
                           </tr>
                         )}
-                      </>
+                      </React.Fragment>
                     ))}
                   </tbody>
                 </table>
