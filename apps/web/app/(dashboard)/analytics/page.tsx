@@ -1,31 +1,54 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
 import { Header } from '@/components/dashboard/header';
-import { ProductivityChart } from '@/components/analytics/productivity-chart';
-import { AppUsageChart } from '@/components/analytics/app-usage-chart';
-import { useExportCSV, todayISO, daysAgoISO } from '@/hooks/use-analytics';
+import { ProductivityStackedChart } from '@/components/analytics/productivity-stacked-chart';
+import { CategoryDonut } from '@/components/analytics/category-donut';
+import { ProductivityHeatmap } from '@/components/analytics/productivity-heatmap';
+import { TeamProductivityTable } from '@/components/analytics/team-productivity-table';
+import { useExportCSV, last7Days, last30Days, thisWeek, lastWeek, todayISO } from '@/hooks/use-analytics';
 import { Button } from '@/components/ui/button';
 import { Download } from 'lucide-react';
+
+type PresetKey = '7d' | '30d' | 'thisWeek' | 'lastWeek' | 'custom';
+
+interface DateRange {
+  from: string;
+  to: string;
+}
+
+function getPresetRange(preset: PresetKey): DateRange {
+  switch (preset) {
+    case '7d': return last7Days();
+    case '30d': return last30Days();
+    case 'thisWeek': return thisWeek();
+    case 'lastWeek': return lastWeek();
+    default: return last7Days();
+  }
+}
 
 export default function AnalyticsPage() {
   const { data: session, status } = useSession();
   const isManager =
     session?.user?.role === 'admin' || session?.user?.role === 'manager';
 
-  const [from, setFrom] = useState(daysAgoISO(6)); // last 7 days
-  const [to, setTo] = useState(todayISO());
-  const [selectedUserId, setSelectedUserId] = useState<string | undefined>(undefined);
+  const [preset, setPreset] = useState<PresetKey>('7d');
+  const [customFrom, setCustomFrom] = useState(last7Days().from);
+  const [customTo, setCustomTo] = useState(todayISO());
 
-  // For employees, lock to their own userId once session loads
-  useEffect(() => {
-    if (status === 'authenticated' && !isManager && session?.user?.id) {
-      setSelectedUserId(session.user.id);
-    }
-  }, [status, isManager, session?.user?.id]);
+  const range: DateRange =
+    preset === 'custom'
+      ? { from: customFrom, to: customTo }
+      : getPresetRange(preset);
+
+  const userId = isManager ? undefined : (session?.user?.id ?? undefined);
 
   const exportCSV = useExportCSV();
+
+  const handlePreset = useCallback((key: PresetKey) => {
+    setPreset(key);
+  }, []);
 
   if (status === 'loading') {
     return (
@@ -36,49 +59,60 @@ export default function AnalyticsPage() {
     );
   }
 
+  const presets: { key: PresetKey; label: string }[] = [
+    { key: '7d', label: 'Last 7 Days' },
+    { key: '30d', label: 'Last 30 Days' },
+    { key: 'thisWeek', label: 'This Week' },
+    { key: 'lastWeek', label: 'Last Week' },
+    { key: 'custom', label: 'Custom' },
+  ];
+
   return (
     <>
       <Header title="Analytics" />
+
       <div className="p-6 space-y-6 max-w-7xl">
-        {/* Filters */}
-        <div className="flex flex-wrap gap-3 items-center">
-          <label className="text-sm font-medium text-slate-700">From</label>
-          <input
-            type="date"
-            aria-label="Start date"
-            value={from}
-            max={to}
-            onChange={(e) => setFrom(e.target.value)}
-            className="border border-slate-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
-          />
 
-          <label className="text-sm font-medium text-slate-700">To</label>
-          <input
-            type="date"
-            aria-label="End date"
-            value={to}
-            min={from}
-            max={todayISO()}
-            onChange={(e) => setTo(e.target.value)}
-            className="border border-slate-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
-          />
+        {/* ── Date Range Controls ─────────────────────────────────────── */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex rounded-md border border-slate-200 overflow-hidden">
+            {presets.map((p) => (
+              <button
+                key={p.key}
+                onClick={() => handlePreset(p.key)}
+                className={[
+                  'px-3 py-1.5 text-sm transition-colors border-r border-slate-200 last:border-r-0',
+                  preset === p.key
+                    ? 'bg-blue-600 text-white font-medium'
+                    : 'bg-white text-slate-600 hover:bg-slate-50',
+                ].join(' ')}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
 
-          {isManager && (
-            <>
-              <label className="text-sm font-medium text-slate-700 ml-2">
-                Employee ID (optional)
-              </label>
+          {preset === 'custom' && (
+            <div className="flex items-center gap-2">
               <input
-                type="text"
-                aria-label="Filter by employee UUID"
-                placeholder="all employees"
-                value={selectedUserId ?? ''}
-                onChange={(e) =>
-                  setSelectedUserId(e.target.value.trim() || undefined)
-                }
-                className="border border-slate-300 rounded-md px-3 py-1.5 text-sm w-72 focus:outline-none focus:ring-2 focus:ring-blue-300"
+                type="date"
+                aria-label="Custom start date"
+                value={customFrom}
+                max={customTo}
+                onChange={(e) => setCustomFrom(e.target.value)}
+                className="border border-slate-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
               />
-            </>
+              <span className="text-slate-400 text-sm">to</span>
+              <input
+                type="date"
+                aria-label="Custom end date"
+                value={customTo}
+                min={customFrom}
+                max={todayISO()}
+                onChange={(e) => setCustomTo(e.target.value)}
+                className="border border-slate-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+              />
+            </div>
           )}
 
           <Button
@@ -86,18 +120,49 @@ export default function AnalyticsPage() {
             size="sm"
             className="ml-auto flex items-center gap-2"
             disabled={exportCSV.isPending}
-            onClick={() =>
-              exportCSV.mutate({ from, to, userId: selectedUserId })
-            }
+            onClick={() => exportCSV.mutate({ from: range.from, to: range.to, userId })}
           >
             <Download className="h-4 w-4" aria-hidden="true" />
             {exportCSV.isPending ? 'Exporting\u2026' : 'Export CSV'}
           </Button>
         </div>
 
-        {/* Charts */}
-        <ProductivityChart from={from} to={to} userId={selectedUserId} />
-        <AppUsageChart from={from} to={to} userId={selectedUserId} />
+        {/* ── My Productivity Section ─────────────────────────────────── */}
+        <section aria-labelledby="productivity-heading">
+          <h2
+            id="productivity-heading"
+            className="text-base font-semibold text-slate-800 mb-3"
+          >
+            {isManager ? 'Org Productivity' : 'My Productivity'}
+          </h2>
+          <div className="grid grid-cols-1 xl:grid-cols-5 gap-4">
+            <div className="xl:col-span-3">
+              <ProductivityStackedChart from={range.from} to={range.to} userId={userId} />
+            </div>
+            <div className="xl:col-span-2">
+              <CategoryDonut from={range.from} to={range.to} userId={userId} />
+            </div>
+          </div>
+        </section>
+
+        {/* ── Heatmap Section ─────────────────────────────────────────── */}
+        <section aria-labelledby="heatmap-heading">
+          <h2 id="heatmap-heading" className="text-base font-semibold text-slate-800 mb-3">
+            Activity Heatmap
+          </h2>
+          <ProductivityHeatmap weeks={8} userId={userId} />
+        </section>
+
+        {/* ── Team Overview (managers/admins only) ─────────────────────── */}
+        {isManager && (
+          <section aria-labelledby="team-overview-heading">
+            <h2 id="team-overview-heading" className="text-base font-semibold text-slate-800 mb-3">
+              Team Overview
+            </h2>
+            <TeamProductivityTable from={range.from} to={range.to} />
+          </section>
+        )}
+
       </div>
     </>
   );
