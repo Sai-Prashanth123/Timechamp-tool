@@ -23,6 +23,8 @@ import { CreateTaskDto } from './dto/create-task.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
 import { CreateMilestoneDto } from './dto/create-milestone.dto';
 import { UpdateMilestoneDto } from './dto/update-milestone.dto';
+import { MoveTaskDto } from './dto/move-task.dto';
+import { CreateCommentDto } from './dto/create-comment.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -126,6 +128,38 @@ export class ProjectsController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.service.deleteTask(projectId, id, user.organizationId);
+  }
+
+  @Patch(':projectId/tasks/:taskId/move')
+  @ApiOperation({ summary: 'Move a task to a new column/position' })
+  moveTask(
+    @CurrentUser() user: User,
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Param('taskId', ParseUUIDPipe) taskId: string,
+    @Body() dto: MoveTaskDto,
+  ) {
+    return this.service.moveTask(projectId, taskId, user.organizationId, dto);
+  }
+
+  @Get(':projectId/tasks/:taskId/comments')
+  @ApiOperation({ summary: 'Get comments for a task' })
+  getComments(
+    @CurrentUser() user: User,
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Param('taskId', ParseUUIDPipe) taskId: string,
+  ) {
+    return this.service.getComments(projectId, taskId, user.organizationId);
+  }
+
+  @Post(':projectId/tasks/:taskId/comments')
+  @ApiOperation({ summary: 'Add a comment to a task' })
+  addComment(
+    @CurrentUser() user: User,
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Param('taskId', ParseUUIDPipe) taskId: string,
+    @Body() dto: CreateCommentDto,
+  ) {
+    return this.service.addComment(projectId, taskId, user.organizationId, user.id, dto.content);
   }
 
   // ── Milestones ───────────────────────────────────────────────────────

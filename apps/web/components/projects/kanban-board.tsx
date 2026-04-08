@@ -1,11 +1,24 @@
 'use client';
 
 import { useState } from 'react';
-import { Card, CardContent } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
+import {
+  DndContext,
+  DragEndEvent,
+  DragOverlay,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  closestCorners,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  verticalListSortingStrategy,
+  useSortable,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Button } from '@/components/ui/button';
 import {
   Select,
   SelectContent,
@@ -20,120 +33,58 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
-import {
-  useUpdateTask,
-  useCreateTask,
-  useDeleteTask,
-  type Task,
-  type TaskStatus,
-  type TaskPriority,
-} from '@/hooks/use-projects';
-import { ChevronRight, ChevronLeft, Plus, Trash2 } from 'lucide-react';
+import { Plus } from 'lucide-react';
+import type { Task, TaskPriority } from '@/hooks/use-projects';
+import { useMoveTask, useCreateTask } from '@/hooks/use-projects';
 
-const COLUMNS: { key: TaskStatus; label: string }[] = [
-  { key: 'todo', label: 'Todo' },
-  { key: 'in_progress', label: 'In Progress' },
-  { key: 'in_review', label: 'In Review' },
-  { key: 'done', label: 'Done' },
+const COLUMNS = [
+  { id: 'todo',        label: 'To Do',       color: 'bg-slate-100 text-slate-600' },
+  { id: 'in_progress', label: 'In Progress',  color: 'bg-blue-100 text-blue-700' },
+  { id: 'in_review',   label: 'In Review',    color: 'bg-amber-100 text-amber-700' },
+  { id: 'done',        label: 'Done',         color: 'bg-green-100 text-green-700' },
 ];
 
-const PRIORITY_VARIANT: Record<
-  TaskPriority,
-  'default' | 'secondary' | 'destructive' | 'outline'
-> = {
-  low: 'secondary',
-  medium: 'outline',
-  high: 'default',
-  urgent: 'destructive',
+const PRIORITY_COLORS: Record<string, string> = {
+  high:   'bg-red-100 text-red-700',
+  medium: 'bg-amber-100 text-amber-700',
+  low:    'bg-slate-100 text-slate-600',
+  urgent: 'bg-red-200 text-red-800',
 };
 
-const STATUS_ORDER: TaskStatus[] = ['todo', 'in_progress', 'in_review', 'done'];
+function TaskCard({ task, onSelect }: { task: Task; onSelect: (t: Task) => void }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
 
-function TaskCard({
-  task,
-  projectId,
-}: {
-  task: Task;
-  projectId: string;
-}) {
-  const updateTask = useUpdateTask(projectId);
-  const deleteTask = useDeleteTask(projectId);
-  const currentIndex = STATUS_ORDER.indexOf(task.status);
-
-  const movePrev = () => {
-    if (currentIndex <= 0) return;
-    updateTask.mutate({ id: task.id, status: STATUS_ORDER[currentIndex - 1] });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
   };
 
-  const moveNext = () => {
-    if (currentIndex >= STATUS_ORDER.length - 1) return;
-    updateTask.mutate({ id: task.id, status: STATUS_ORDER[currentIndex + 1] });
-  };
+  const isOverdue = task.dueDate && new Date(task.dueDate) < new Date() && task.status !== 'done';
 
   return (
-    <Card className="shadow-sm">
-      <CardContent className="p-3 space-y-2">
-        <div className="flex items-start justify-between gap-2">
-          <p className="text-sm font-medium leading-tight">{task.title}</p>
-          <Badge
-            variant={PRIORITY_VARIANT[task.priority]}
-            className="shrink-0 text-xs capitalize"
-          >
+    <div
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+      onClick={() => onSelect(task)}
+      className="bg-white rounded-lg border border-slate-200 p-3 shadow-sm hover:shadow-md cursor-grab active:cursor-grabbing transition-shadow"
+    >
+      <p className="text-sm font-medium text-slate-800 leading-snug mb-2">{task.title}</p>
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {task.priority && (
+          <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full uppercase tracking-wide ${PRIORITY_COLORS[task.priority] ?? 'bg-slate-100 text-slate-600'}`}>
             {task.priority}
-          </Badge>
-        </div>
-        {task.description && (
-          <p className="text-xs text-muted-foreground line-clamp-2">
-            {task.description}
-          </p>
-        )}
-        {task.assigneeId && (
-          <p className="text-xs text-muted-foreground">
-            Assignee: <span className="font-mono">{task.assigneeId.slice(0, 8)}</span>
-          </p>
+          </span>
         )}
         {task.dueDate && (
-          <p className="text-xs text-muted-foreground">
-            Due: {new Date(task.dueDate).toLocaleDateString()}
-          </p>
+          <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${isOverdue ? 'bg-red-100 text-red-600 font-semibold' : 'bg-slate-50 text-slate-500'}`}>
+            {new Date(task.dueDate).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+          </span>
         )}
-        <div className="flex items-center justify-between pt-1">
-          <div className="flex gap-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 w-6 p-0"
-              onClick={movePrev}
-              disabled={currentIndex <= 0 || updateTask.isPending}
-              aria-label="Move task to previous status"
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 w-6 p-0"
-              onClick={moveNext}
-              disabled={
-                currentIndex >= STATUS_ORDER.length - 1 || updateTask.isPending
-              }
-              aria-label="Move task to next status"
-            >
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 w-6 p-0 text-destructive hover:text-destructive"
-            onClick={() => deleteTask.mutate(task.id)}
-            aria-label="Delete task"
-          >
-            <Trash2 className="h-3 w-3" />
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }
 
@@ -205,10 +156,7 @@ function CreateTaskDialog({ projectId }: { projectId: string }) {
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
               <Label htmlFor="task-priority">Priority</Label>
-              <Select
-                value={priority}
-                onValueChange={(v) => setPriority(v as TaskPriority)}
-              >
+              <Select value={priority} onValueChange={(v) => setPriority(v as TaskPriority)}>
                 <SelectTrigger id="task-priority">
                   <SelectValue />
                 </SelectTrigger>
@@ -243,11 +191,7 @@ function CreateTaskDialog({ projectId }: { projectId: string }) {
             />
           </div>
           <div className="flex justify-end gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setOpen(false)}
-            >
+            <Button type="button" variant="outline" onClick={() => setOpen(false)}>
               Cancel
             </Button>
             <Button type="submit" disabled={createTask.isPending}>
@@ -263,47 +207,108 @@ function CreateTaskDialog({ projectId }: { projectId: string }) {
 interface KanbanBoardProps {
   tasks: Task[];
   projectId: string;
+  onSelectTask?: (task: Task) => void;
 }
 
-export function KanbanBoard({ tasks, projectId }: KanbanBoardProps) {
-  const grouped = COLUMNS.reduce<Record<TaskStatus, Task[]>>(
-    (acc, col) => {
-      acc[col.key] = tasks.filter((t) => t.status === col.key);
-      return acc;
-    },
-    { todo: [], in_progress: [], in_review: [], done: [] },
+export function KanbanBoard({ tasks, projectId, onSelectTask }: KanbanBoardProps) {
+  const [activeTask, setActiveTask] = useState<Task | null>(null);
+  const moveTask = useMoveTask(projectId);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
   );
+
+  const tasksByColumn = (colId: string) =>
+    tasks
+      .filter((t) => t.status === colId)
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+
+  function handleDragStart(event: any) {
+    const task = tasks.find((t) => t.id === event.active.id);
+    setActiveTask(task ?? null);
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    setActiveTask(null);
+    const { active, over } = event;
+    if (!over) return;
+
+    const draggedTask = tasks.find((t) => t.id === active.id);
+    if (!draggedTask) return;
+
+    // Determine target column
+    const overCol = COLUMNS.find((c) => c.id === over.id);
+    const overTask = tasks.find((t) => t.id === over.id);
+    const targetStatus = overCol?.id ?? overTask?.status ?? draggedTask.status;
+
+    const colTasks = tasksByColumn(targetStatus).filter((t) => t.id !== draggedTask.id);
+    let targetIdx = colTasks.length; // append at end
+
+    if (overTask && overTask.status === targetStatus) {
+      targetIdx = colTasks.findIndex((t) => t.id === overTask.id);
+      if (targetIdx === -1) targetIdx = colTasks.length;
+    }
+
+    if (draggedTask.status === targetStatus && draggedTask.position === targetIdx) return;
+
+    moveTask.mutate({ taskId: draggedTask.id, status: targetStatus, position: targetIdx });
+  }
 
   return (
     <div className="space-y-4">
       <div className="flex justify-end">
         <CreateTaskDialog projectId={projectId} />
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        {COLUMNS.map((col) => (
-          <div key={col.key} className="flex flex-col gap-2">
-            <div className="flex items-center justify-between px-1">
-              <h3 className="text-sm font-semibold text-foreground">
-                {col.label}
-              </h3>
-              <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
-                {grouped[col.key].length}
-              </span>
+
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCorners}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+      >
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+          {COLUMNS.map((col) => {
+            const colTasks = tasksByColumn(col.id);
+            return (
+              <div key={col.id} className="flex flex-col bg-slate-50 rounded-xl p-3 min-h-[200px]">
+                {/* Column header */}
+                <div className="flex items-center gap-2 mb-3">
+                  <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${col.color}`}>
+                    {col.label}
+                  </span>
+                  <span className="text-xs text-slate-400 ml-auto">{colTasks.length}</span>
+                </div>
+
+                {/* Droppable area */}
+                <SortableContext items={colTasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
+                  <div className="flex flex-col gap-2 flex-1">
+                    {colTasks.map((task) => (
+                      <TaskCard
+                        key={task.id}
+                        task={task}
+                        onSelect={onSelectTask ?? (() => {})}
+                      />
+                    ))}
+                    {colTasks.length === 0 && (
+                      <div className="flex-1 flex items-center justify-center rounded-lg border-2 border-dashed border-slate-200 text-xs text-slate-400 py-6">
+                        Drop here
+                      </div>
+                    )}
+                  </div>
+                </SortableContext>
+              </div>
+            );
+          })}
+        </div>
+
+        <DragOverlay>
+          {activeTask && (
+            <div className="bg-white rounded-lg border border-blue-400 p-3 shadow-xl rotate-2 text-sm font-medium text-slate-800 max-w-[200px]">
+              {activeTask.title}
             </div>
-            <div className="flex flex-col gap-2 min-h-[120px] bg-muted/30 rounded-lg p-2">
-              {grouped[col.key].length === 0 ? (
-                <p className="text-xs text-muted-foreground text-center py-6">
-                  No tasks
-                </p>
-              ) : (
-                grouped[col.key].map((task) => (
-                  <TaskCard key={task.id} task={task} projectId={projectId} />
-                ))
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
+          )}
+        </DragOverlay>
+      </DndContext>
     </div>
   );
 }

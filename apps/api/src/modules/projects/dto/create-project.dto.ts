@@ -4,6 +4,7 @@ import {
   IsOptional,
   IsISO8601,
   MaxLength,
+  Matches,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -23,4 +24,10 @@ export class CreateProjectDto {
   @IsOptional()
   @IsISO8601()
   deadline?: string;
+
+  @ApiPropertyOptional({ example: '#3B82F6' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^#[0-9A-Fa-f]{6}$/)
+  color?: string;
 }

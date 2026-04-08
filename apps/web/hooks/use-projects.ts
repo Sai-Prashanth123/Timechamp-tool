@@ -15,6 +15,7 @@ export type Project = {
   description: string | null;
   status: ProjectStatus;
   deadline: string | null;
+  color: string;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
@@ -31,6 +32,8 @@ export type Task = {
   priority: TaskPriority;
   estimatedHours: number | null;
   dueDate: string | null;
+  position: number;
+  createdBy: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -317,5 +320,46 @@ export function useDeleteMilestone(projectId: string) {
         (err as any)?.response?.data?.message ?? 'Failed to delete milestone';
       toast.error(message);
     },
+  });
+}
+
+// ── Kanban: Move Task ──────────────────────────────────────────────────
+
+export function useMoveTask(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ taskId, status, position }: { taskId: string; status: string; position: number }) => {
+      const { data } = await api.patch(`/projects/${projectId}/tasks/${taskId}/move`, { status, position });
+      return data.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['projects', projectId] });
+    },
+  });
+}
+
+// ── Comments ───────────────────────────────────────────────────────────
+
+export function useAddComment(taskId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (content: string) => {
+      const { data } = await api.post(`/projects/tasks/${taskId}/comments`, { content });
+      return data.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['task-comments', taskId] });
+    },
+  });
+}
+
+export function useComments(taskId: string) {
+  return useQuery({
+    queryKey: ['task-comments', taskId],
+    queryFn: async () => {
+      const { data } = await api.get(`/projects/tasks/${taskId}/comments`);
+      return data.data;
+    },
+    enabled: !!taskId,
   });
 }

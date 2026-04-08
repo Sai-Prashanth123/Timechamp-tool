@@ -51,6 +51,12 @@ export class Task {
   @Column({ name: 'due_date', type: 'timestamptz', nullable: true })
   dueDate: Date | null;
 
+  @Column({ type: 'integer', default: 0 })
+  position: number;
+
+  @Column({ name: 'created_by', nullable: true })
+  createdBy: string | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
