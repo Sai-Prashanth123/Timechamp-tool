@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/timechamp/agent/internal/buffer"
+	"github.com/timechamp/agent/internal/health"
 	"github.com/timechamp/agent/internal/capture"
 	"github.com/timechamp/agent/internal/classifier"
 	"github.com/timechamp/agent/internal/config"
@@ -54,10 +56,7 @@ func run() {
 	// CTRL_C_EVENT / CTRL_CLOSE_EVENT signals when the launching terminal
 	// or tray process exits. Stdout/Stderr are already redirected to a log
 	// file by the tray, so losing the console handle is harmless.
-	if runtime.GOOS == "windows" {
-		kernel32 := syscall.NewLazyDLL("kernel32.dll")
-		kernel32.NewProc("FreeConsole").Call()
-	}
+	detachConsole()
 
 	cfg := config.Load()
 	log.Printf("Time Champ Agent %s (%s) on %s/%s", Version, BuildDate, runtime.GOOS, runtime.GOARCH)
@@ -223,6 +222,15 @@ func run() {
 		_ = os.WriteFile(pidFile, pidData, 0600)
 	}
 	defer os.Remove(pidFile)
+
+	// Start local health HTTP server — tray uses this to detect liveness.
+	healthSrv := health.New(Version)
+	healthSrv.Start()
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		healthSrv.Stop(ctx)
+	}()
 
 	log.Printf("Agent started. Screenshot every %ds, sync every %ds, idle threshold %ds",
 		cfg.ScreenshotInterval, cfg.SyncInterval, cfg.IdleThreshold)

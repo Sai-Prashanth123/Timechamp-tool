@@ -159,8 +159,18 @@ func (a *App) GetStatus() map[string]interface{} {
 	return map[string]interface{}{"running": running}
 }
 
-// isAgentRunning checks the pid file written by the agent on startup.
+// isAgentRunning checks liveness via the health HTTP endpoint, falling back to
+// the PID file + Windows OpenProcess check to cover the startup race window.
 func (a *App) isAgentRunning(dataDir string) bool {
+	// Primary check: HTTP health endpoint (cannot lie — if it responds, agent is alive)
+	client := &http.Client{Timeout: 1 * time.Second}
+	resp, err := client.Get("http://127.0.0.1:27183/health")
+	if err == nil {
+		resp.Body.Close()
+		return resp.StatusCode == 200
+	}
+
+	// Fallback: PID file + Windows OpenProcess (covers startup race)
 	pidFile := filepath.Join(dataDir, "agent.pid")
 	data, err := os.ReadFile(pidFile)
 	if err != nil {
@@ -171,23 +181,18 @@ func (a *App) isAgentRunning(dataDir string) bool {
 		return false
 	}
 	if runtime.GOOS == "windows" {
-		// On Windows, os.FindProcess always succeeds regardless of whether
-		// the process is alive. Use OpenProcess + GetExitCodeProcess instead.
 		const PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 		kernel32 := syscall.NewLazyDLL("kernel32.dll")
-		openProcess := kernel32.NewProc("OpenProcess")
-		handle, _, _ := openProcess.Call(PROCESS_QUERY_LIMITED_INFORMATION, 0, uintptr(pid))
+		handle, _, _ := kernel32.NewProc("OpenProcess").Call(
+			PROCESS_QUERY_LIMITED_INFORMATION, 0, uintptr(pid))
 		if handle == 0 {
 			return false
 		}
-		getExitCode := kernel32.NewProc("GetExitCodeProcess")
 		var exitCode uint32
-		getExitCode.Call(handle, uintptr(unsafe.Pointer(&exitCode)))
+		kernel32.NewProc("GetExitCodeProcess").Call(handle, uintptr(unsafe.Pointer(&exitCode)))
 		kernel32.NewProc("CloseHandle").Call(handle)
-		const STILL_ACTIVE = 259
-		return exitCode == STILL_ACTIVE
+		return exitCode == 259 // STILL_ACTIVE
 	}
-	// On Unix, FindProcess always succeeds; signal 0 tests liveness.
 	proc, err := os.FindProcess(pid)
 	if err != nil || proc == nil {
 		return false
