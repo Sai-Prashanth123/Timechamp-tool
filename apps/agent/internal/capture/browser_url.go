@@ -67,7 +67,6 @@ func ExtractURLFromTitle(title string) string {
 	if len(parts) < 2 {
 		return ""
 	}
-	domainPattern := regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9\-]{0,61}[a-zA-Z0-9]?\.[a-zA-Z]{2,}`)
 	for i := len(parts) - 2; i >= 0; i-- {
 		candidate := strings.TrimSpace(parts[i])
 		if domain, ok := siteNameToDomain[strings.ToLower(candidate)]; ok {
@@ -79,6 +78,8 @@ func ExtractURLFromTitle(title string) string {
 	}
 	return ""
 }
+
+var domainPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9\-]{0,61}[a-zA-Z0-9]?\.[a-zA-Z]{2,}`)
 
 var siteNameToDomain = map[string]string{
 	"github":     "github.com",
