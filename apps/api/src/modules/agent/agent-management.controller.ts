@@ -1,8 +1,6 @@
 import {
   Controller,
   Get,
-  Inject,
-  Optional,
   Post,
   Request,
   UseGuards,
@@ -10,6 +8,7 @@ import {
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { AgentService } from './agent.service';
+import { TokenService } from '../../infrastructure/token/token.service';
 
 @ApiTags('Agent Management')
 @UseGuards(JwtAuthGuard)
@@ -17,15 +16,12 @@ import { AgentService } from './agent.service';
 export class AgentManagementController {
   constructor(
     private readonly agentService: AgentService,
-    @Optional() @Inject('TOKEN_SERVICE') private readonly tokenService: any,
+    private readonly tokenService: TokenService,
   ) {}
 
   @Post('invite-token')
   @ApiOperation({ summary: 'Generate a 72-hour invite token for agent registration' })
   async generateInviteToken(@Request() req: any) {
-    if (!this.tokenService) {
-      return { token: null, message: 'Token service not configured' };
-    }
     const token = await this.tokenService.generate('invite', req.user.sub);
     return { token };
   }

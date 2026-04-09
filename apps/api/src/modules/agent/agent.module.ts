@@ -5,6 +5,7 @@ import { AgentRegistrationController } from './agent-registration.controller';
 import { AgentManagementController } from './agent-management.controller';
 import { AgentService } from './agent.service';
 import { AgentAuthGuard } from './agent-auth.guard';
+import { TokenService } from '../../infrastructure/token/token.service';
 import { ActivityEvent } from '../../database/entities/activity-event.entity';
 import { Screenshot } from '../../database/entities/screenshot.entity';
 import { User } from '../../database/entities/user.entity';
@@ -22,7 +23,7 @@ import { MonitoringModule } from '../monitoring/monitoring.module';
     forwardRef(() => MonitoringModule),
   ],
   controllers: [AgentController, AgentRegistrationController, AgentManagementController],
-  providers: [AgentService, AgentAuthGuard],
+  providers: [AgentService, AgentAuthGuard, TokenService],
   exports: [AgentService],
 })
 export class AgentModule {}
