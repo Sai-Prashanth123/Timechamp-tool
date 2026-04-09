@@ -12,7 +12,8 @@ export default function Status() {
   const [status, setStatus] = useState<Status>({ running: false })
 
   function refresh() {
-    GetStatus().then((s: Status) => setStatus(s))
+    // Wails generates GetStatus() as Promise<Record<string,any>>; cast to Status
+    GetStatus().then((s: unknown) => setStatus(s as Status))
   }
 
   useEffect(() => {
