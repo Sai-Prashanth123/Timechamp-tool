@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TimeChamp Agent Setup</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f172a; color: #e2e8f0;
+      display: flex; align-items: center; justify-content: center;
+      min-height: 100vh;
+    }
+    .card {
+      background: #1e293b; border: 1px solid #334155;
+      border-radius: 12px; padding: 2rem; width: 440px;
+      box-shadow: 0 25px 50px rgba(0,0,0,0.5);
+    }
+    .logo { display: flex; align-items: center; gap: 12px; margin-bottom: 1.5rem; }
+    .logo-icon {
+      width: 40px; height: 40px; border-radius: 10px;
+      background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px; flex-shrink: 0;
+    }
+    .logo h1 { font-size: 1.1rem; font-weight: 700; color: #f1f5f9; }
+    .logo p { font-size: 0.78rem; color: #64748b; margin-top: 2px; }
+    hr { border: none; border-top: 1px solid #334155; margin: 1.2rem 0; }
+    .field { margin-bottom: 1rem; }
+    label { display: block; font-size: 0.8rem; font-weight: 500; color: #94a3b8; margin-bottom: 0.4rem; }
+    input {
+      width: 100%; padding: 0.6rem 0.85rem;
+      background: #0f172a; border: 1px solid #334155;
+      border-radius: 6px; color: #e2e8f0; font-size: 0.875rem;
+      transition: border-color 0.15s;
+    }
+    input:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.15); }
+    .hint { font-size: 0.72rem; color: #475569; margin-top: 0.35rem; }
+    .btn {
+      width: 100%; padding: 0.72rem;
+      background: #3b82f6; color: white;
+      border: none; border-radius: 6px;
+      font-size: 0.9rem; font-weight: 600; cursor: pointer;
+      margin-top: 0.5rem; transition: background 0.15s;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+    }
+    .btn:hover:not(:disabled) { background: #2563eb; }
+    .btn:disabled { background: #1e40af; cursor: not-allowed; opacity: 0.8; }
+    .spinner {
+      width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: white; border-radius: 50%;
+      animation: spin 0.7s linear infinite; display: none;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .status {
+      margin-top: 1rem; padding: 0.75rem 1rem;
+      border-radius: 6px; font-size: 0.82rem; display: none; line-height: 1.5;
+    }
+    .status.error { background: #450a0a; border: 1px solid #7f1d1d; color: #fca5a5; }
+    .status.success { background: #052e16; border: 1px solid #14532d; color: #86efac; }
+    .steps { display: flex; gap: 6px; margin-bottom: 1.2rem; }
+    .step {
+      flex: 1; height: 3px; border-radius: 2px; background: #334155; transition: background 0.3s;
+    }
+    .step.active { background: #3b82f6; }
+    .step.done { background: #22c55e; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">
+    <div class="logo-icon">⏱</div>
+    <div>
+      <h1>TimeChamp Agent Setup</h1>
+      <p>Register this device with your organisation</p>
+    </div>
+  </div>
+
+  <div class="steps">
+    <div class="step" id="s1"></div>
+    <div class="step" id="s2"></div>
+    <div class="step" id="s3"></div>
+  </div>
+
+  <hr>
+
+  <div class="field">
+    <label for="apiUrl">API URL</label>
+    <input id="apiUrl" type="url" value="https://api.timechamp.io/api/v1" autocomplete="off" />
+    <div class="hint">Leave as default unless you are self-hosting</div>
+  </div>
+
+  <div class="field">
+    <label for="token">Invite Token</label>
+    <input id="token" type="password" placeholder="Paste your invite token here" autocomplete="off" />
+    <div class="hint">Generate from dashboard → Settings → Agent Setup → Generate Token</div>
+  </div>
+
+  <button class="btn" id="btn" onclick="register()">
+    <div class="spinner" id="spinner"></div>
+    <span id="btnText">Register &amp; Start Agent</span>
+  </button>
+
+  <div id="status" class="status"></div>
+</div>
+
+<script>
+  setStep(1);
+
+  function setStep(n) {
+    for (let i = 1; i <= 3; i++) {
+      const el = document.getElementById('s' + i);
+      el.className = 'step' + (i < n ? ' done' : i === n ? ' active' : '');
+    }
+  }
+
+  async function register() {
+    const btn = document.getElementById('btn');
+    const spinner = document.getElementById('spinner');
+    const btnText = document.getElementById('btnText');
+    const apiUrl = document.getElementById('apiUrl').value.trim();
+    const token = document.getElementById('token').value.trim();
+
+    if (!token) { showStatus('error', 'Please paste your invite token.'); return; }
+
+    btn.disabled = true;
+    spinner.style.display = 'block';
+    showStatus('', '');
+
+    // Step 1: verify API is reachable
+    setStep(1);
+    btnText.textContent = 'Checking connection…';
+    try {
+      const ping = await fetch('/ping?apiUrl=' + encodeURIComponent(apiUrl));
+      const pd = await ping.json();
+      if (!ping.ok) {
+        showStatus('error', pd.error || 'Cannot reach API server.');
+        reset(btn, spinner, btnText); return;
+      }
+    } catch(e) {
+      showStatus('error', 'Network error — cannot reach setup server.');
+      reset(btn, spinner, btnText); return;
+    }
+
+    // Step 2: register device
+    setStep(2);
+    btnText.textContent = 'Registering device…';
+    try {
+      const res = await fetch('/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiUrl, token })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showStatus('error', data.error || 'Registration failed. Check your invite token.');
+        reset(btn, spinner, btnText); return;
+      }
+    } catch(e) {
+      showStatus('error', 'Network error during registration.');
+      reset(btn, spinner, btnText); return;
+    }
+
+    // Step 3: done
+    setStep(3);
+    btnText.textContent = 'Done!';
+    spinner.style.display = 'none';
+    showStatus('success',
+      '✓ Device registered! The agent is now running in the background and monitoring has started.\n\nThis window will close in 4 seconds.');
+    setTimeout(() => window.close(), 4000);
+  }
+
+  function reset(btn, spinner, btnText) {
+    btn.disabled = false;
+    spinner.style.display = 'none';
+    btnText.textContent = 'Register & Start Agent';
+    setStep(1);
+  }
+
+  function showStatus(type, msg) {
+    const el = document.getElementById('status');
+    el.className = 'status' + (type ? ' ' + type : '');
+    el.textContent = msg;
+    el.style.display = msg ? 'block' : 'none';
+  }
+</script>
+</body>
+</html>

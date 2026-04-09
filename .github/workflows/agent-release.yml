@@ -89,8 +89,10 @@ jobs:
           CGO_ENABLED: '0'
         run: |
           cd apps/agent
+          EXTRA=""
+          if [ "${{ matrix.goos }}" = "windows" ]; then EXTRA="-H=windowsgui"; fi
           go build \
-            -ldflags "-w -s -X main.Version=${{ github.ref_name }}" \
+            -ldflags "-w -s ${EXTRA} -X main.Version=${{ github.ref_name }}" \
             -o timechamp-setup-${{ matrix.suffix }}${{ matrix.ext }} \
             ./cmd/setup
 
