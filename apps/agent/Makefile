@@ -1,4 +1,4 @@
-.PHONY: build build-windows build-darwin build-linux test clean
+.PHONY: build build-windows build-darwin build-linux build-tray test clean
 
 AGENT_BIN   := timechamp-agent
 WATCHDOG_BIN := timechamp-watchdog
@@ -16,6 +16,10 @@ build-darwin:
 build-linux:
 	GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/linux/$(AGENT_BIN) ./cmd/agent
 	GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/linux/$(WATCHDOG_BIN) ./cmd/watchdog
+
+build-tray:
+	GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o cmd/tray/agent_bin ./cmd/agent
+	cd cmd/tray && wails build -platform windows/amd64
 
 test:
 	go test ./... -v -timeout 30s
