@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/energye/systray"
 	"github.com/timechamp/agent/internal/config"
@@ -35,6 +36,7 @@ func NewApp(binary []byte) *App {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	go a.autoLaunchIfRegistered()
+	go a.monitorAgent()
 }
 
 // autoLaunchIfRegistered starts the embedded agent if the device is already
@@ -168,15 +170,47 @@ func (a *App) isAgentRunning(dataDir string) bool {
 	if err := json.Unmarshal(data, &pid); err != nil {
 		return false
 	}
+	if runtime.GOOS == "windows" {
+		// On Windows, os.FindProcess always succeeds regardless of whether
+		// the process is alive. Use OpenProcess + GetExitCodeProcess instead.
+		const PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+		kernel32 := syscall.NewLazyDLL("kernel32.dll")
+		openProcess := kernel32.NewProc("OpenProcess")
+		handle, _, _ := openProcess.Call(PROCESS_QUERY_LIMITED_INFORMATION, 0, uintptr(pid))
+		if handle == 0 {
+			return false
+		}
+		getExitCode := kernel32.NewProc("GetExitCodeProcess")
+		var exitCode uint32
+		getExitCode.Call(handle, uintptr(unsafe.Pointer(&exitCode)))
+		kernel32.NewProc("CloseHandle").Call(handle)
+		const STILL_ACTIVE = 259
+		return exitCode == STILL_ACTIVE
+	}
+	// On Unix, FindProcess always succeeds; signal 0 tests liveness.
 	proc, err := os.FindProcess(pid)
 	if err != nil || proc == nil {
 		return false
 	}
-	// On Unix, FindProcess always succeeds; signal 0 tests liveness.
-	if runtime.GOOS != "windows" {
-		return proc.Signal(os.Signal(nil)) == nil
+	return proc.Signal(os.Signal(nil)) == nil
+}
+
+// monitorAgent runs forever, restarting the agent if it exits unexpectedly.
+func (a *App) monitorAgent() {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		token, err := keychain.LoadToken()
+		if err != nil || token == "" {
+			continue // not registered yet
+		}
+		cfg := config.Load()
+		if a.isAgentRunning(cfg.DataDir) {
+			continue // already running fine
+		}
+		// Registered but agent is not running — restart it.
+		a.autoLaunchIfRegistered()
 	}
-	return true
 }
 
 // extractAgent writes the embedded agent binary to dataDir and returns its path.

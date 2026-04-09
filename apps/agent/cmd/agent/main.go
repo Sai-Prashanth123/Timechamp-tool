@@ -50,6 +50,15 @@ func main() {
 }
 
 func run() {
+	// On Windows, detach from the parent console so we don't receive
+	// CTRL_C_EVENT / CTRL_CLOSE_EVENT signals when the launching terminal
+	// or tray process exits. Stdout/Stderr are already redirected to a log
+	// file by the tray, so losing the console handle is harmless.
+	if runtime.GOOS == "windows" {
+		kernel32 := syscall.NewLazyDLL("kernel32.dll")
+		kernel32.NewProc("FreeConsole").Call()
+	}
+
 	cfg := config.Load()
 	log.Printf("Time Champ Agent %s (%s) on %s/%s", Version, BuildDate, runtime.GOOS, runtime.GOARCH)
 
