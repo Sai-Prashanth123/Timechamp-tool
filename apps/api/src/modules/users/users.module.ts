@@ -7,9 +7,10 @@ import { Organization } from '../../database/entities/organization.entity';
 import { TokenService } from '../../infrastructure/token/token.service';
 import { MailerService } from '../../infrastructure/mailer/mailer.service';
 import { RedisModule } from '../../infrastructure/redis/redis.module';
+import { AdminModule } from '../admin/admin.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([User, Organization]), RedisModule],
+  imports: [TypeOrmModule.forFeature([User, Organization]), RedisModule, AdminModule],
   controllers: [UsersController],
   providers: [UsersService, TokenService, MailerService],
   exports: [UsersService],

@@ -8,3 +8,5 @@ dist/
 coverage/
 *.log
 .pnpm-store/
+updater-private-key.pem
+secrets/

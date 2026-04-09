@@ -34,6 +34,7 @@ import { ActivityEvent } from './database/entities/activity-event.entity';
 import { Screenshot } from './database/entities/screenshot.entity';
 import { Project } from './database/entities/project.entity';
 import { Task } from './database/entities/task.entity';
+import { TaskComment } from './database/entities/task-comment.entity';
 import { Milestone } from './database/entities/milestone.entity';
 import { GpsLocation } from './database/entities/gps-location.entity';
 import { Geofence } from './database/entities/geofence.entity';
@@ -98,6 +99,7 @@ import { AdminModule } from './modules/admin/admin.module';
           Screenshot,
           Project,
           Task,
+          TaskComment,
           Milestone,
           GpsLocation,
           Geofence,

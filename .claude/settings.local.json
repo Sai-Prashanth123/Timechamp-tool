@@ -11,7 +11,12 @@
       "Bash(PGPASSWORD=\"postgres0@123\" psql -U postgres -h localhost -c \"CREATE DATABASE timechamp;\")",
       "Bash(go env:*)",
       "Bash(grep -n \"func Set\" \"$\\(go env GOPATH\\)/pkg/mod/github.com/energye/systray@v1.0.3/systray_windows.go\")",
-      "Bash(grep -n \"func Set\" \"$\\(go env GOPATH\\)/pkg/mod/github.com/energye/systray@v1.0.3/systray_unix.go\")"
+      "Bash(grep -n \"func Set\" \"$\\(go env GOPATH\\)/pkg/mod/github.com/energye/systray@v1.0.3/systray_unix.go\")",
+      "Bash(cmd //c \"taskkill /F /IM node.exe /FI \\\\\"WINDOWTITLE eq*3001*\\\\\"\")",
+      "Bash(netstat -ano)",
+      "Bash(awk '{print $5}')",
+      "Bash(xargs -r cmd //c \"taskkill /PID {} /F\")",
+      "Bash(wails build:*)"
     ]
   }
 }
