@@ -78,9 +78,9 @@ jobs:
     strategy:
       matrix:
         include:
-          - { runner: windows-latest, goos: windows, goarch: amd64, suffix: windows-amd64, ext: .exe }
-          - { runner: macos-latest,   goos: darwin,  goarch: arm64, suffix: darwin-arm64,  ext: ''   }
-          - { runner: ubuntu-latest,  goos: linux,   goarch: amd64, suffix: linux-amd64,   ext: ''   }
+          - { runner: windows-latest, goos: windows, goarch: amd64, suffix: windows-amd64, ext: .exe, wails_tags: ''          }
+          - { runner: macos-latest,   goos: darwin,  goarch: arm64, suffix: darwin-arm64,  ext: '',   wails_tags: ''          }
+          - { runner: ubuntu-latest,  goos: linux,   goarch: amd64, suffix: linux-amd64,   ext: '',   wails_tags: 'webkit2_41'}
 
     steps:
       - uses: actions/checkout@v4
@@ -122,8 +122,11 @@ jobs:
         shell: bash
         run: |
           cd apps/agent/cmd/tray
+          TAGS_FLAG=""
+          if [ -n "${{ matrix.wails_tags }}" ]; then TAGS_FLAG="-tags ${{ matrix.wails_tags }}"; fi
           wails build \
             -platform ${{ matrix.goos }}/${{ matrix.goarch }} \
+            ${TAGS_FLAG} \
             -ldflags "-X main.Version=${{ github.ref_name }}" \
             -o timechamp-tray-${{ matrix.suffix }}${{ matrix.ext || '' }}
 
