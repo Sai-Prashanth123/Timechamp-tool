@@ -1,4 +1,6 @@
 import { Injectable, ServiceUnavailableException, UnauthorizedException, Logger, forwardRef, Inject, Optional } from '@nestjs/common';
+import * as fs from 'fs';
+import * as path from 'path';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -17,6 +19,7 @@ import { SyncMetricsDto } from './dto/sync-metrics.dto';
 import { SyncScreenshotDto } from './dto/sync-screenshot.dto';
 import { SyncGpsDto } from './dto/sync-gps.dto';
 import { RegisterAgentDto } from './dto/register-agent.dto';
+import { CrashReportDto } from './dto/crash-report.dto';
 import { MonitoringGateway } from '../monitoring/monitoring.gateway';
 import { TokenService } from '../../infrastructure/token/token.service';
 
@@ -260,5 +263,36 @@ export class AgentService {
       where: { organizationId: orgId },
       order: { lastSeenAt: 'DESC' },
     });
+  }
+
+  async saveCrashReport(dto: CrashReportDto): Promise<void> {
+    if (!dto.agent_version || !dto.os) return;
+    const report: Record<string, unknown> = { ...dto };
+
+    // Log for immediate visibility in application logs.
+    this.logger.error(
+      `Agent crash: org=${report['org_id'] ?? 'unknown'} ` +
+      `employee=${report['employee_id'] ?? 'unknown'} ` +
+      `version=${String(report['agent_version'])} ` +
+      `os=${String(report['os'])} ` +
+      `uptime_sec=${report['uptime_sec'] ?? 'unknown'} ` +
+      `message=${String(report['message'] ?? '').slice(0, 500)}`,
+    );
+
+    // Persist to NDJSON file so reports survive API restarts.
+    try {
+      const logsDir = this.config.get<string>('CRASH_REPORTS_DIR', 'logs/crashes');
+      await fs.promises.mkdir(logsDir, { recursive: true });
+      const entry = JSON.stringify({
+        ...report,
+        received_at: new Date().toISOString(),
+        message: String(report['message'] ?? '').slice(0, 2000),
+        stack_trace: String(report['stack_trace'] ?? '').slice(0, 10000),
+      }) + '\n';
+      const filename = path.join(logsDir, `crashes-${new Date().toISOString().slice(0, 10)}.ndjson`);
+      await fs.promises.appendFile(filename, entry, 'utf8');
+    } catch (err) {
+      this.logger.error('Failed to persist crash report to file', err);
+    }
   }
 }

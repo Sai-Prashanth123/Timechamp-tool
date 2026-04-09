@@ -26,6 +26,7 @@ import (
 	"github.com/timechamp/agent/internal/service"
 	"github.com/timechamp/agent/internal/stream"
 	agentsync "github.com/timechamp/agent/internal/sync"
+	"github.com/timechamp/agent/internal/telemetry"
 	"github.com/timechamp/agent/internal/updater"
 )
 
@@ -104,6 +105,17 @@ func run() {
 		cfg.EmployeeID = employeeID
 		log.Printf("Agent registered for org %s employee %s", orgID, employeeID)
 	}
+
+	// Crash reporter: catches panics, sends stack trace to API, then re-panics.
+	// Must be deferred AFTER identity is loaded so org/employee IDs are available.
+	crashReporter := telemetry.NewReporter(
+		cfg.APIURL,
+		cfg.DataDir,
+		cfg.OrgID,
+		cfg.EmployeeID,
+		Version,
+	)
+	defer crashReporter.Recover()
 
 	// Optional TLS certificate pinning.
 	var clientOpts []agentsync.ClientOption
