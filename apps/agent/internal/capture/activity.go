@@ -5,6 +5,8 @@ type ActiveWindow struct {
 	AppName     string
 	WindowTitle string
 	URL         string // populated by browser extension hook (future); empty for now
+	BundleID    string // macOS only — e.g. com.apple.Safari, com.google.Chrome
+	PID         int    // macOS only — process ID for AX API scraping
 }
 
 // GetActiveWindow returns the currently focused window info.

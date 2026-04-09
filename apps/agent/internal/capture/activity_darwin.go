@@ -81,16 +81,22 @@ if (procs.length === 0) {
         }
     } catch(e) {}
 
-    JSON.stringify({ app: appName, title: title, url: url, incognito: incognito });
+    var bundleId = "";
+    try { bundleId = p.bundleIdentifier(); } catch(e) {}
+    var pid = 0;
+    try { pid = p.unixId(); } catch(e) {}
+    JSON.stringify({ app: appName, title: title, url: url, incognito: incognito, bundle_id: bundleId, pid: pid });
 }
 `
 
 // jxaWindowResult is the JSON shape returned by the JXA script.
 type jxaWindowResult struct {
-	App      string `json:"app"`
-	Title    string `json:"title"`
-	URL      string `json:"url"`
+	App       string `json:"app"`
+	Title     string `json:"title"`
+	URL       string `json:"url"`
 	Incognito bool   `json:"incognito"`
+	BundleID  string `json:"bundle_id"`
+	PID       int    `json:"pid"`
 }
 
 // getActiveWindow uses JXA (JavaScript for Automation) for high-fidelity window
@@ -139,6 +145,8 @@ func getActiveWindow() (ActiveWindow, error) {
 		AppName:     res.App,
 		WindowTitle: title,
 		URL:         url,
+		BundleID:    res.BundleID,
+		PID:         res.PID,
 	}, nil
 }
 
