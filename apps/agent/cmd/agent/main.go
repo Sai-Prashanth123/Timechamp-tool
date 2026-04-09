@@ -266,6 +266,7 @@ func run() {
 	metricsTicker    := time.NewTicker(60 * time.Second)
 	heartbeatTicker  := time.NewTicker(5 * time.Minute)
 	pruneTicker      := time.NewTicker(24 * time.Hour)
+	telemetryTicker  := time.NewTicker(60 * time.Second)
 
 	defer windowTicker.Stop()
 	defer screenshotTicker.Stop()
@@ -274,6 +275,14 @@ func run() {
 	defer metricsTicker.Stop()
 	defer heartbeatTicker.Stop()
 	defer pruneTicker.Stop()
+	defer telemetryTicker.Stop()
+
+	telemetryCollector := telemetry.NewCollector(Version, cfg.OrgID, cfg.EmployeeID)
+	var (
+		lastSyncSuccess   bool
+		lastSyncLatencyMs int64
+		syncErrorCount    int
+	)
 
 	inputCounter := &capture.InputCounter{}
 
@@ -410,6 +419,7 @@ func run() {
 			// Flush heartbeat queue to SQLite first.
 			hq.FlushAll()
 
+			syncStart := time.Now()
 			n1, err1 := uploader.FlushActivity()
 			n2, err2 := uploader.FlushKeystrokes()
 			n3, err3 := uploader.FlushScreenshots()
@@ -420,6 +430,12 @@ func run() {
 			} else if n1+n2+n3+n4 > 0 {
 				log.Printf("Synced: %d activity, %d keystrokes, %d screenshots, %d metrics",
 					n1, n2, n3, n4)
+			}
+			// Track telemetry state for the next self-report.
+			lastSyncLatencyMs = time.Since(syncStart).Milliseconds()
+			lastSyncSuccess = (err1 == nil && err2 == nil && err3 == nil && err4 == nil)
+			if !lastSyncSuccess {
+				syncErrorCount++
 			}
 
 		// ── Heartbeat ──────────────────────────────────────────────────────────
@@ -435,6 +451,16 @@ func run() {
 			if err := db.PruneSynced(cfg.MaxBufferDays); err != nil {
 				log.Printf("Prune error: %v", err)
 			}
+
+		// ── Agent telemetry ────────────────────────────────────────────────────
+		case <-telemetryTicker.C:
+			if !client.IsAvailable() {
+				continue
+			}
+			buffered, _ := db.CountActivity()
+			t := telemetryCollector.Collect(lastSyncSuccess, lastSyncLatencyMs, buffered, syncErrorCount)
+			syncErrorCount = 0 // reset after reporting
+			_ = client.Post("/agent/sync/telemetry", t)
 		}
 	}
 }
