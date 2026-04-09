@@ -327,13 +327,9 @@ func run() {
 				continue
 			}
 
-			// Overlay URL from browser extension cache if available.
-			url := win.URL
-			if url == "" {
-				if extURL := urlCache.Load().(string); extURL != "" {
-					url = extURL
-				}
-			}
+			// Resolve URL via 3-layer detection: extension cache → native → title parsing.
+			extURL := urlCache.Load().(string)
+			url := capture.ResolveURL(win, extURL)
 
 			// Classify app into a productivity category.
 			cat := classifier.Classify(win.AppName, win.WindowTitle, url, classifier.DefaultRules)
