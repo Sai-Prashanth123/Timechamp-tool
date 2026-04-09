@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { randomBytes } from 'crypto';
 import { RedisService } from '../redis/redis.service';
 
@@ -12,11 +12,13 @@ const TTL: Record<TokenPurpose, number> = {
 
 @Injectable()
 export class TokenService {
+  private readonly logger = new Logger(TokenService.name);
   constructor(private redis: RedisService) {}
 
   async generate(purpose: TokenPurpose, userId: string): Promise<string> {
     const token = randomBytes(32).toString('hex');
     await this.redis.set(`token:${purpose}:${token}`, userId, TTL[purpose]);
+    this.logger.log(`Generated ${purpose} token for user ${userId}: ${token.slice(0, 8)}...`);
     return token;
   }
 

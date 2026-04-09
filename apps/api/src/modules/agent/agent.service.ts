@@ -195,7 +195,9 @@ export class AgentService {
     orgId: string;
   }> {
     // Validate and consume invite token (one-time use)
+    this.logger.log(`Register attempt: token="${dto.inviteToken?.slice(0, 8)}..." len=${dto.inviteToken?.length}`);
     const userId = await this.tokenService.consume('invite', dto.inviteToken);
+    this.logger.log(`Token consume result: userId="${userId}"`);
     if (!userId) {
       throw new UnauthorizedException('Invalid or expired invite token');
     }

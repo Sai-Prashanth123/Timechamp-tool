@@ -22,7 +22,7 @@ export class AgentManagementController {
   @Post('invite-token')
   @ApiOperation({ summary: 'Generate a 72-hour invite token for agent registration' })
   async generateInviteToken(@Request() req: any) {
-    const token = await this.tokenService.generate('invite', req.user.sub);
+    const token = await this.tokenService.generate('invite', req.user.id);
     return { token };
   }
 
