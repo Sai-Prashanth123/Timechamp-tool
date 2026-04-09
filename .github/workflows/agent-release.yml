@@ -130,8 +130,9 @@ jobs:
       - name: Upload to release
         shell: bash
         run: |
+          # Wails places output in build/bin/ inside the project directory
           gh release upload "${{ github.ref_name }}" \
-            apps/agent/cmd/tray/timechamp-tray-${{ matrix.suffix }}${{ matrix.ext || '' }} \
+            apps/agent/cmd/tray/build/bin/timechamp-tray-${{ matrix.suffix }}${{ matrix.ext || '' }} \
             --clobber
         env:
           GH_TOKEN: ${{ github.token }}
