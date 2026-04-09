@@ -29,20 +29,28 @@ func IsBrowser(win ActiveWindow) bool {
 }
 
 // ResolveURL returns the best URL for the active window using 3 layers.
-// Layer 1: browser extension cache. Layer 2: native win.URL. Layer 3: title parsing.
-// Returns "" if not a browser or no URL found.
+// Layer 1: browser extension cache. Layer 2: native URL (JXA/Win32) or Accessibility API.
+// Layer 3: title parsing. Returns "" if not a browser or no URL found.
 func ResolveURL(win ActiveWindow, extensionCache string) string {
 	if !IsBrowser(win) {
 		return ""
 	}
+	// Layer 1: native messaging extension cache (most accurate)
 	if extensionCache != "" {
 		URLDetectionLayer.Store(1)
 		return extensionCache
 	}
+	// Layer 2a: URL already populated by JXA/Win32 native capture
 	if win.URL != "" {
 		URLDetectionLayer.Store(2)
 		return win.URL
 	}
+	// Layer 2b: platform-specific Accessibility API scraping
+	if url := scrapeURLViaAccessibility(win); url != "" {
+		URLDetectionLayer.Store(2)
+		return url
+	}
+	// Layer 3: window title parsing (always available, least accurate)
 	if url := ExtractURLFromTitle(win.WindowTitle); url != "" {
 		URLDetectionLayer.Store(3)
 		return url
