@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"time"
 )
@@ -16,8 +15,6 @@ import (
 const (
 	circuitOpenThreshold = 3 // consecutive failures before opening circuit
 	circuitResetAfter    = 5 * time.Minute
-	maxRetries           = 3
-	retryBaseDelay       = 2 * time.Second
 )
 
 // Client is an HTTP client for the TimeChamp API.
@@ -96,7 +93,7 @@ func (c *Client) IsAvailable() bool {
 	return false
 }
 
-// Post sends a POST request with a JSON body. Retries with exponential backoff on 5xx.
+// Post sends a POST request with a JSON body using full-jitter exponential backoff.
 func (c *Client) Post(path string, body any) error {
 	if !c.IsAvailable() {
 		return fmt.Errorf("circuit open: API unavailable, retry after %s",
@@ -108,16 +105,15 @@ func (c *Client) Post(path string, body any) error {
 		return fmt.Errorf("marshal body: %w", err)
 	}
 
-	var lastErr error
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		if attempt > 0 {
-			delay := time.Duration(math.Pow(2, float64(attempt-1))) * retryBaseDelay
-			time.Sleep(delay)
+	return WithRetry(DefaultRetry, func() (permanent bool, err error) {
+		// Re-check circuit breaker on each attempt — may have tripped during retries.
+		if !c.IsAvailable() {
+			return true, fmt.Errorf("circuit open: giving up after breaker tripped")
 		}
 
 		req, err := http.NewRequest(http.MethodPost, c.baseURL+path, bytes.NewReader(data))
 		if err != nil {
-			return fmt.Errorf("build request: %w", err)
+			return true, fmt.Errorf("build request: %w", err) // permanent: bad request construction
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+c.token)
@@ -126,27 +122,23 @@ func (c *Client) Post(path string, body any) error {
 		resp, err := c.http.Do(req)
 		if err != nil {
 			c.recordFailure()
-			lastErr = fmt.Errorf("request failed: %w", err)
-			continue
+			return false, fmt.Errorf("request failed: %w", err)
 		}
-		io.Copy(io.Discard, resp.Body)
+		_, _ = io.Copy(io.Discard, resp.Body) // drain body to allow connection reuse
 		resp.Body.Close()
 
-		if resp.StatusCode == 401 || resp.StatusCode == 403 {
-			// Auth error — no point retrying.
-			return fmt.Errorf("auth error: %d", resp.StatusCode)
+		if isPermanentHTTPStatus(resp.StatusCode) {
+			return true, fmt.Errorf("permanent HTTP %d for %s", resp.StatusCode, path)
 		}
-		if resp.StatusCode >= 500 {
+		if resp.StatusCode >= 400 {
 			c.recordFailure()
-			lastErr = fmt.Errorf("server error: %d", resp.StatusCode)
-			continue
+			return false, fmt.Errorf("HTTP %d for %s", resp.StatusCode, path)
 		}
 		// Success
 		c.failures = 0
 		c.circuitOpen = false
-		return nil
-	}
-	return lastErr
+		return false, nil
+	})
 }
 
 // PutPresigned sends a PUT request to a presigned S3 URL with binary body.
