@@ -67,13 +67,7 @@ func (a *App) autoLaunchIfRegistered() {
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
 	}
-
-	logPath := filepath.Join(cfg.DataDir, "agent.log")
-	if logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600); err == nil {
-		cmd.Stdout = logFile
-		cmd.Stderr = logFile
-		defer logFile.Close()
-	}
+	// Agent manages its own rotating log file in DataDir — no stdout redirect needed.
 
 	_ = cmd.Start()
 }
@@ -126,10 +120,6 @@ func (a *App) Register(apiURL, inviteToken string) error {
 		return fmt.Errorf("extract agent: %w", err)
 	}
 
-	// Pipe agent output to a log file for debugging.
-	logPath := filepath.Join(cfg.DataDir, "agent.log")
-	logFile, _ := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
-
 	cmd := exec.Command(agentPath)
 	// Only pass TC_API_URL — agent reads auth token from OS keychain.
 	cmd.Env = append(os.Environ(), "TC_API_URL="+apiURL)
@@ -137,19 +127,9 @@ func (a *App) Register(apiURL, inviteToken string) error {
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
 	}
-	if logFile != nil {
-		cmd.Stdout = logFile
-		cmd.Stderr = logFile
-	}
+	// Agent manages its own rotating log file in DataDir — no stdout redirect needed.
 	if err := cmd.Start(); err != nil {
-		if logFile != nil {
-			logFile.Close()
-		}
 		return fmt.Errorf("launch agent: %w", err)
-	}
-	// Close our handle to the log file; the child process keeps its own handle.
-	if logFile != nil {
-		logFile.Close()
 	}
 	return nil
 }

@@ -17,8 +17,9 @@ import (
 	"time"
 
 	"github.com/timechamp/agent/internal/buffer"
-	"github.com/timechamp/agent/internal/health"
 	"github.com/timechamp/agent/internal/capture"
+	"github.com/timechamp/agent/internal/health"
+	agentlog "github.com/timechamp/agent/internal/logging"
 	"github.com/timechamp/agent/internal/classifier"
 	"github.com/timechamp/agent/internal/config"
 	"github.com/timechamp/agent/internal/heartbeat"
@@ -55,11 +56,23 @@ func main() {
 func run() {
 	// On Windows, detach from the parent console so we don't receive
 	// CTRL_C_EVENT / CTRL_CLOSE_EVENT signals when the launching terminal
-	// or tray process exits. Stdout/Stderr are already redirected to a log
-	// file by the tray, so losing the console handle is harmless.
+	// or tray process exits.
 	detachConsole()
 
 	cfg := config.Load()
+
+	// Set up rotating log file (10 MB cap, 3 backups: agent.log.1/2/3).
+	// The agent manages its own log; the tray no longer needs to redirect stdout.
+	if err := os.MkdirAll(cfg.DataDir, 0700); err == nil {
+		logPath := filepath.Join(cfg.DataDir, "agent.log")
+		if logWriter, err := agentlog.NewRotatingWriter(logPath, 10*1024*1024); err == nil {
+			log.SetOutput(logWriter)
+			defer logWriter.Close()
+		} else {
+			log.Printf("Warning: could not open rotating log file: %v", err)
+		}
+	}
+
 	log.Printf("Time Champ Agent %s (%s) on %s/%s", Version, BuildDate, runtime.GOOS, runtime.GOARCH)
 
 	// Load saved identity.
@@ -265,6 +278,7 @@ func run() {
 	inputTicker      := time.NewTicker(60 * time.Second)
 	metricsTicker    := time.NewTicker(60 * time.Second)
 	heartbeatTicker  := time.NewTicker(5 * time.Minute)
+	configTicker     := time.NewTicker(5 * time.Minute)
 	pruneTicker      := time.NewTicker(24 * time.Hour)
 	telemetryTicker  := time.NewTicker(60 * time.Second)
 
@@ -274,6 +288,7 @@ func run() {
 	defer inputTicker.Stop()
 	defer metricsTicker.Stop()
 	defer heartbeatTicker.Stop()
+	defer configTicker.Stop()
 	defer pruneTicker.Stop()
 	defer telemetryTicker.Stop()
 
@@ -468,6 +483,24 @@ func run() {
 				if err := client.Heartbeat(); err != nil {
 					log.Printf("Heartbeat failed: %v", err)
 				}
+			}
+
+		// ── Config hot-reload (every 5 min) ───────────────────────────────────
+		// Re-fetches screenshot interval from API; resets ticker if changed.
+		// This allows managers to adjust capture frequency without agent restart.
+		case <-configTicker.C:
+			if !client.IsAvailable() {
+				continue
+			}
+			newOrgCfg, err := client.FetchOrgConfig()
+			if err != nil || newOrgCfg == nil {
+				continue
+			}
+			if newOrgCfg.ScreenshotIntervalSec > 0 &&
+				newOrgCfg.ScreenshotIntervalSec != cfg.ScreenshotInterval {
+				cfg.ScreenshotInterval = newOrgCfg.ScreenshotIntervalSec
+				screenshotTicker.Reset(time.Duration(newOrgCfg.ScreenshotIntervalSec) * time.Second)
+				log.Printf("Config updated: screenshot interval → %ds", newOrgCfg.ScreenshotIntervalSec)
 			}
 
 		// ── Daily prune + WAL checkpoint ──────────────────────────────────────
