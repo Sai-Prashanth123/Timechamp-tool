@@ -135,10 +135,14 @@ jobs:
         run: |
           BIN_DIR="apps/agent/cmd/tray/build/bin"
           NAME="timechamp-tray-${{ matrix.suffix }}"
+          echo "=== build/bin contents ==="
+          ls -la "${BIN_DIR}/" || true
           if [ "${{ matrix.goos }}" = "darwin" ]; then
-            # Wails on macOS produces a .app bundle — zip it for distribution
+            # Wails names the .app from wails.json outputfilename, not the -o flag
+            APP_BUNDLE=$(find "${BIN_DIR}" -maxdepth 1 -name "*.app" | head -1)
+            echo "Found bundle: ${APP_BUNDLE}"
             cd "${BIN_DIR}"
-            zip -r "${NAME}.zip" "${NAME}.app"
+            zip -r "${NAME}.zip" "$(basename ${APP_BUNDLE})"
             cd -
             gh release upload "${{ github.ref_name }}" "${BIN_DIR}/${NAME}.zip" --clobber
           else
