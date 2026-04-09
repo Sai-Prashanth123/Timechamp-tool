@@ -9,9 +9,25 @@ permissions:
   contents: write
 
 jobs:
+  # ── Create the GitHub release first (prevents race conditions) ──────────────
+  create-release:
+    name: Create release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create GitHub release for ${{ github.ref_name }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --generate-notes \
+            --draft=false || true
+        env:
+          GH_TOKEN: ${{ github.token }}
+
   # ── Headless agent binaries (cross-compiled, CGO_ENABLED=0) ────────────────
   build-agent:
     name: Agent ${{ matrix.suffix }}
+    needs: create-release
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -43,15 +59,21 @@ jobs:
             -o timechamp-agent-${{ matrix.suffix }}${{ matrix.ext || '' }} \
             ./cmd/agent
 
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: apps/agent/timechamp-agent-${{ matrix.suffix }}${{ matrix.ext || '' }}
-          generate_release_notes: false
+      - name: Upload to release
+        shell: bash
+        run: |
+          cd apps/agent
+          gh release upload "${{ github.ref_name }}" \
+            timechamp-agent-${{ matrix.suffix }}${{ matrix.ext || '' }} \
+            --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
 
   # ── Desktop tray app (Wails v2 native window + system tray) ────────────────
   # Requires native runners — Wails needs the platform's webview toolkit (CGO).
   build-tray:
     name: Tray ${{ matrix.suffix }}
+    needs: create-release
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
@@ -101,7 +123,11 @@ jobs:
             -ldflags "-X main.Version=${{ github.ref_name }}" \
             -o timechamp-tray-${{ matrix.suffix }}${{ matrix.ext || '' }}
 
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: apps/agent/cmd/tray/timechamp-tray-${{ matrix.suffix }}${{ matrix.ext || '' }}
-          generate_release_notes: false
+      - name: Upload to release
+        shell: bash
+        run: |
+          gh release upload "${{ github.ref_name }}" \
+            apps/agent/cmd/tray/timechamp-tray-${{ matrix.suffix }}${{ matrix.ext || '' }} \
+            --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
