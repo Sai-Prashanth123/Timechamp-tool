@@ -28,6 +28,11 @@ func Open(dir string) (*DB, error) {
 
 	conn.SetMaxOpenConns(1) // SQLite is single-writer
 
+	// Cap WAL file at 64 MB and auto-checkpoint every 1000 pages (~4 MB).
+	// Prevents unbounded WAL growth on long-running agents.
+	conn.Exec(`PRAGMA journal_size_limit=67108864`) //nolint:errcheck
+	conn.Exec(`PRAGMA wal_autocheckpoint=1000`)     //nolint:errcheck
+
 	db := &DB{conn: conn}
 	if err := db.migrate(); err != nil {
 		conn.Close()
@@ -42,7 +47,21 @@ func (db *DB) Close() error {
 	return db.conn.Close()
 }
 
+// Checkpoint forces a WAL checkpoint, truncating the WAL file.
+// Call this daily or on graceful shutdown to reclaim disk space.
+func (db *DB) Checkpoint() error {
+	_, err := db.conn.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+	return err
+}
+
 func (db *DB) migrate() error {
+	// Check schema version — bail out if already migrated.
+	var version int
+	db.conn.QueryRow(`PRAGMA user_version`).Scan(&version) //nolint:errcheck
+	if version >= 1 {
+		return nil
+	}
+
 	_, err := db.conn.Exec(`
 		CREATE TABLE IF NOT EXISTS activity_events (
 			id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -98,5 +117,10 @@ func (db *DB) migrate() error {
 		CREATE INDEX IF NOT EXISTS idx_keystrokes_synced ON keystroke_events(synced);
 		CREATE INDEX IF NOT EXISTS idx_metrics_synced ON system_metrics(synced);
 	`)
+	if err != nil {
+		return err
+	}
+	// Stamp schema version so future migrations can detect upgrades.
+	_, err = db.conn.Exec(`PRAGMA user_version = 1`)
 	return err
 }

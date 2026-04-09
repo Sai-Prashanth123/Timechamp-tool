@@ -2,6 +2,7 @@ package sync
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -186,6 +187,8 @@ func (u *Uploader) FlushMetrics() (int, error) {
 }
 
 // FlushScreenshots uploads all unsynced screenshots via presigned S3 URLs.
+// Each screenshot is retried up to 3 times before being skipped.
+// Failures are logged so they are visible in agent.log (not silently dropped).
 func (u *Uploader) FlushScreenshots() (int, error) {
 	if !u.client.IsAvailable() {
 		return 0, nil
@@ -196,33 +199,52 @@ func (u *Uploader) FlushScreenshots() (int, error) {
 		return 0, err
 	}
 
+	screenshotRetry := RetryConfig{
+		InitialInterval: 2 * time.Second,
+		Multiplier:      2.0,
+		MaxInterval:     30 * time.Second,
+		MaxElapsedTime:  90 * time.Second,
+	}
+
 	flushed := 0
 	for _, r := range records {
 		filename := filepath.Base(r.LocalPath)
-		uploadURL, s3Key, err := u.client.GetPresignedUploadURL(filename)
+
+		err := WithRetry(screenshotRetry, func() (permanent bool, err error) {
+			if !u.client.IsAvailable() {
+				return true, fmt.Errorf("circuit open")
+			}
+
+			uploadURL, s3Key, uploadErr := u.client.GetPresignedUploadURL(filename)
+			if uploadErr != nil {
+				return false, fmt.Errorf("presign: %w", uploadErr)
+			}
+
+			// Stat before upload so size metadata is accurate.
+			var fileSizeBytes int64
+			if fi, statErr := os.Stat(r.LocalPath); statErr == nil {
+				fileSizeBytes = fi.Size()
+			}
+
+			if uploadErr = uploadFileToS3(u.client, r.LocalPath, uploadURL); uploadErr != nil {
+				return false, fmt.Errorf("S3 upload: %w", uploadErr)
+			}
+
+			if uploadErr = u.client.SaveScreenshotMeta(s3Key, r.CapturedAt, fileSizeBytes); uploadErr != nil {
+				return false, fmt.Errorf("save meta: %w", uploadErr)
+			}
+
+			if uploadErr = u.db.MarkScreenshotSynced(r.ID, s3Key); uploadErr != nil {
+				return false, fmt.Errorf("mark synced: %w", uploadErr)
+			}
+
+			flushed++
+			return false, nil
+		})
+
 		if err != nil {
-			continue // skip this screenshot, try next
+			log.Printf("Screenshot upload failed (will retry next sync): %v — path=%s", err, r.LocalPath)
 		}
-
-		if err := uploadFileToS3(u.client, r.LocalPath, uploadURL); err != nil {
-			continue
-		}
-
-		// Get file size for metadata.
-		var fileSizeBytes int64
-		if fi, err := os.Stat(r.LocalPath); err == nil {
-			fileSizeBytes = fi.Size()
-		}
-
-		// Notify API of the completed upload.
-		if err := u.client.SaveScreenshotMeta(s3Key, r.CapturedAt, fileSizeBytes); err != nil {
-			continue
-		}
-
-		if err := u.db.MarkScreenshotSynced(r.ID, s3Key); err != nil {
-			continue
-		}
-		flushed++
 	}
 
 	return flushed, nil

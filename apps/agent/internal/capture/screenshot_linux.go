@@ -25,11 +25,30 @@ func CaptureScreenshot(dir string) (string, error) {
 	filename := fmt.Sprintf("ss_%d.jpg", time.Now().UnixMilli())
 	path := filepath.Join(dir, filename)
 
-	// Primary: scrot  (-q sets JPEG quality 0-100)
-	if err := exec.Command("scrot", "-q", "75", path).Run(); err != nil {
-		// Fallback: ImageMagick import
-		if err2 := exec.Command("import", "-window", "root", path).Run(); err2 != nil {
-			return "", fmt.Errorf("scrot: %v; import (ImageMagick): %v", err, err2)
+	// Detect available screenshot tool before attempting capture.
+	// This gives a clear error instead of a cryptic exec failure.
+	scrotPath, scrotErr := exec.LookPath("scrot")
+	importPath, importErr := exec.LookPath("import") // ImageMagick
+
+	if scrotErr != nil && importErr != nil {
+		return "", fmt.Errorf("no screenshot tool found: install scrot (apt install scrot) or imagemagick (apt install imagemagick)")
+	}
+
+	// Primary: scrot (-q sets JPEG quality 0-100)
+	captured := false
+	if scrotErr == nil {
+		if err := exec.Command(scrotPath, "-q", "75", path).Run(); err == nil {
+			captured = true
+		}
+	}
+
+	// Fallback: ImageMagick import
+	if !captured {
+		if importErr != nil {
+			return "", fmt.Errorf("scrot unavailable and imagemagick not installed")
+		}
+		if err := exec.Command(importPath, "-window", "root", path).Run(); err != nil {
+			return "", fmt.Errorf("import (ImageMagick) failed: %w", err)
 		}
 	}
 
@@ -41,11 +60,13 @@ func CaptureScreenshot(dir string) (string, error) {
 	img, err := jpeg.Decode(f)
 	f.Close()
 	if err != nil {
+		os.Remove(path) // clean up partial file
 		return "", fmt.Errorf("decode screenshot: %w", err)
 	}
 
 	data, err := resizeAndEncode(img)
 	if err != nil {
+		os.Remove(path)
 		return "", fmt.Errorf("encode jpeg: %w", err)
 	}
 

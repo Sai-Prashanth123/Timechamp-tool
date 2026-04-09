@@ -43,6 +43,8 @@ func (a *App) startup(ctx context.Context) {
 
 // autoLaunchIfRegistered starts the embedded agent if the device is already
 // registered and the agent is not currently running.
+// The agent token is NOT passed via environment — it reads from the OS keychain
+// directly (already persisted by Register). Env vars are visible in Task Manager.
 func (a *App) autoLaunchIfRegistered() {
 	token, err := keychain.LoadToken()
 	if err != nil || token == "" {
@@ -59,12 +61,9 @@ func (a *App) autoLaunchIfRegistered() {
 		return
 	}
 
-	apiURL := cfg.APIURL
 	cmd := exec.Command(agentPath)
-	cmd.Env = append(os.Environ(),
-		"TC_API_URL="+apiURL,
-		"TC_AGENT_TOKEN="+token,
-	)
+	// Only pass TC_API_URL — agent reads auth token from OS keychain.
+	cmd.Env = append(os.Environ(), "TC_API_URL="+cfg.APIURL)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
 	}
@@ -101,6 +100,8 @@ func (a *App) Ping(apiURL string) error {
 
 // Register authenticates with the API using the invite token, saves credentials,
 // extracts the embedded agent binary to the data directory, and launches it.
+// Token is saved to keychain BEFORE launch; the agent reads it from keychain
+// directly and no secret is passed via environment variable.
 func (a *App) Register(apiURL, inviteToken string) error {
 	hostname, _ := os.Hostname()
 	agentToken, employeeID, orgID, err := agentsync.Register(
@@ -110,6 +111,7 @@ func (a *App) Register(apiURL, inviteToken string) error {
 		return fmt.Errorf("registration failed: %w", err)
 	}
 
+	// Save token to OS keychain BEFORE launching agent so agent can read it.
 	if err := keychain.SaveToken(agentToken); err != nil {
 		return fmt.Errorf("save token: %w", err)
 	}
@@ -129,12 +131,9 @@ func (a *App) Register(apiURL, inviteToken string) error {
 	logFile, _ := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 
 	cmd := exec.Command(agentPath)
-	cmd.Env = append(os.Environ(),
-		"TC_API_URL="+apiURL,
-		"TC_AGENT_TOKEN="+agentToken,
-	)
-	// Detach from parent console so the agent doesn't receive Ctrl+C signals
-	// from terminal sessions that launched the tray.
+	// Only pass TC_API_URL — agent reads auth token from OS keychain.
+	cmd.Env = append(os.Environ(), "TC_API_URL="+apiURL)
+	// Detach from parent console so the agent doesn't receive Ctrl+C signals.
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
 	}
@@ -166,7 +165,7 @@ func (a *App) GetStatus() map[string]interface{} {
 // the PID file + Windows OpenProcess check to cover the startup race window.
 func (a *App) isAgentRunning(dataDir string) bool {
 	// Primary check: HTTP health endpoint (cannot lie — if it responds, agent is alive)
-	client := &http.Client{Timeout: 1 * time.Second}
+	client := &http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Get("http://127.0.0.1:27183/health")
 	if err == nil {
 		resp.Body.Close()
@@ -204,20 +203,35 @@ func (a *App) isAgentRunning(dataDir string) bool {
 }
 
 // monitorAgent runs forever, restarting the agent if it exits unexpectedly.
+// Uses exponential backoff (10s → 5m) to avoid thrashing on repeated failures.
 func (a *App) monitorAgent() {
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-	for range ticker.C {
+	const (
+		minBackoff = 10 * time.Second
+		maxBackoff = 5 * time.Minute
+	)
+	backoff := minBackoff
+
+	for {
+		time.Sleep(backoff)
+
 		token, err := keychain.LoadToken()
 		if err != nil || token == "" {
-			continue // not registered yet
+			backoff = minBackoff // not registered, reset
+			continue
 		}
+
 		cfg := config.Load()
 		if a.isAgentRunning(cfg.DataDir) {
-			continue // already running fine
+			backoff = minBackoff // healthy, reset backoff
+			continue
 		}
-		// Registered but agent is not running — restart it.
+
+		// Agent not running — restart with backoff
 		a.autoLaunchIfRegistered()
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
 	}
 }
 

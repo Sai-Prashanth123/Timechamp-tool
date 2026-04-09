@@ -300,12 +300,26 @@ func run() {
 		case sig := <-quit:
 			log.Printf("Shutdown signal received (%v), flushing buffer...", sig)
 			hq.FlushAll()
-			_, _ = uploader.FlushActivity()
-			_, _ = uploader.FlushKeystrokes()
-			_, _ = uploader.FlushScreenshots()
-			_, _ = uploader.FlushMetrics()
-			time.Sleep(2 * time.Second)
-			log.Println("Shutting down agent.")
+			if n, err := uploader.FlushActivity(); err != nil {
+				log.Printf("Shutdown: flush activity error: %v", err)
+			} else if n > 0 {
+				log.Printf("Shutdown: flushed %d activity records", n)
+			}
+			if n, err := uploader.FlushKeystrokes(); err != nil {
+				log.Printf("Shutdown: flush keystrokes error: %v", err)
+			} else if n > 0 {
+				log.Printf("Shutdown: flushed %d keystroke records", n)
+			}
+			if _, err := uploader.FlushScreenshots(); err != nil {
+				log.Printf("Shutdown: flush screenshots error: %v", err)
+			}
+			if _, err := uploader.FlushMetrics(); err != nil {
+				log.Printf("Shutdown: flush metrics error: %v", err)
+			}
+			if err := db.Checkpoint(); err != nil {
+				log.Printf("Shutdown: WAL checkpoint error: %v", err)
+			}
+			log.Println("Agent shutdown complete.")
 			return
 
 		// ── Window poll (1 second) ─────────────────────────────────────────────
@@ -437,6 +451,16 @@ func run() {
 			if !lastSyncSuccess {
 				syncErrorCount++
 			}
+			// Push live state to health endpoint so tray / monitoring see current health.
+			bufferedForHealth, _ := db.CountActivity()
+			healthSrv.SetMetrics(health.Metrics{
+				BufferDepth:        bufferedForHealth,
+				SyncHealthy:        lastSyncSuccess,
+				LastSyncAt:         time.Now(),
+				HasScreenRecording: capture.HasScreenRecording(),
+				HasAccessibility:   capture.HasAccessibility(),
+				URLDetectionLayer:  capture.URLDetectionLayer.Load(),
+			})
 
 		// ── Heartbeat ──────────────────────────────────────────────────────────
 		case <-heartbeatTicker.C:
@@ -446,10 +470,13 @@ func run() {
 				}
 			}
 
-		// ── Daily prune ────────────────────────────────────────────────────────
+		// ── Daily prune + WAL checkpoint ──────────────────────────────────────
 		case <-pruneTicker.C:
 			if err := db.PruneSynced(cfg.MaxBufferDays); err != nil {
 				log.Printf("Prune error: %v", err)
+			}
+			if err := db.Checkpoint(); err != nil {
+				log.Printf("WAL checkpoint error: %v", err)
 			}
 
 		// ── Agent telemetry ────────────────────────────────────────────────────
@@ -515,7 +542,9 @@ func osVersion() string {
 }
 
 // updaterPublicKey is the ECDSA-P256 PEM public key for verifying update binaries.
-// Replace with your actual signing key before production deployment.
+// The matching private key must be stored securely and used to sign every release asset.
+// To sign: sha256sum the binary, sign with: openssl dgst -sha256 -sign key.pem -out sig.bin agent && xxd -p -c 32 sig.bin > agent.sig
 const updaterPublicKey = `-----BEGIN PUBLIC KEY-----
-MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEPLACEHOLDERREPLACEWITHREALKEY==
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEjQ2if0r+qsOcKW2AIzkhxnfxPuRf
++/SUHdAjO3jOzBrRcG1nQOht/wa/Z6JRAjrDhBqU3FEcOiKCRp1xXU47OA==
 -----END PUBLIC KEY-----`
