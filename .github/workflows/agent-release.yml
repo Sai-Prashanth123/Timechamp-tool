@@ -133,9 +133,16 @@ jobs:
       - name: Upload to release
         shell: bash
         run: |
-          # Wails places output in build/bin/ inside the project directory
-          gh release upload "${{ github.ref_name }}" \
-            apps/agent/cmd/tray/build/bin/timechamp-tray-${{ matrix.suffix }}${{ matrix.ext || '' }} \
-            --clobber
+          BIN_DIR="apps/agent/cmd/tray/build/bin"
+          NAME="timechamp-tray-${{ matrix.suffix }}"
+          if [ "${{ matrix.goos }}" = "darwin" ]; then
+            # Wails on macOS produces a .app bundle — zip it for distribution
+            cd "${BIN_DIR}"
+            zip -r "${NAME}.zip" "${NAME}.app"
+            cd -
+            gh release upload "${{ github.ref_name }}" "${BIN_DIR}/${NAME}.zip" --clobber
+          else
+            gh release upload "${{ github.ref_name }}" "${BIN_DIR}/${NAME}${{ matrix.ext || '' }}" --clobber
+          fi
         env:
           GH_TOKEN: ${{ github.token }}
