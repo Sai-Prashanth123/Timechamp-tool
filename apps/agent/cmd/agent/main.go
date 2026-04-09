@@ -248,14 +248,18 @@ func run() {
 	inputCounter := &capture.InputCounter{}
 
 	// Graceful shutdown.
+	// Ignore SIGINT (Ctrl+C / CTRL_C_EVENT) entirely — this daemon runs in the
+	// background and must not be killed by terminal interrupts from the parent
+	// tray process or its console session. SIGTERM is the explicit stop signal.
+	signal.Ignore(os.Interrupt)
 	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
+	signal.Notify(quit, syscall.SIGTERM)
 
 	for {
 		select {
 
-		case <-quit:
-			log.Println("Shutdown signal received, flushing buffer...")
+		case sig := <-quit:
+			log.Printf("Shutdown signal received (%v), flushing buffer...", sig)
 			hq.FlushAll()
 			_, _ = uploader.FlushActivity()
 			_, _ = uploader.FlushKeystrokes()
