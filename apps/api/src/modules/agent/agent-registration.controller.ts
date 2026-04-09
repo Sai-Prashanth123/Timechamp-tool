@@ -13,6 +13,6 @@ export class AgentRegistrationController {
   @ApiOperation({ summary: 'Register desktop agent device using an invite token' })
   async register(@Body() dto: RegisterAgentDto) {
     const { agentToken, employeeId, orgId } = await this.service.registerAgent(dto);
-    return { data: { agentToken, employeeId, orgId } };
+    return { agentToken, employeeId, orgId };
   }
 }

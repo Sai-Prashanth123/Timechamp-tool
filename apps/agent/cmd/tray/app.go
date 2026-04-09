@@ -78,11 +78,36 @@ func (a *App) Register(apiURL, inviteToken string) error {
 		return fmt.Errorf("extract agent: %w", err)
 	}
 
+	// Pipe agent output to a log file for debugging.
+	logPath := filepath.Join(cfg.DataDir, "agent.log")
+	logFile, _ := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+
 	cmd := exec.Command(agentPath)
-	cmd.Env = append(os.Environ(), "TC_API_URL="+apiURL)
+	cmd.Env = append(os.Environ(),
+		"TC_API_URL="+apiURL,
+		"TC_AGENT_TOKEN="+agentToken,
+	)
+	if logFile != nil {
+		cmd.Stdout = logFile
+		cmd.Stderr = logFile
+	}
 	if err := cmd.Start(); err != nil {
+		if logFile != nil {
+			logFile.Close()
+		}
 		return fmt.Errorf("launch agent: %w", err)
 	}
+	// Detect early crash: wait 1 second and check the process is still alive.
+	go func() {
+		time.Sleep(1 * time.Second)
+		if err := cmd.Process.Signal(os.Signal(nil)); err != nil {
+			// Process already exited — read last log lines if available
+			_ = cmd.Wait()
+		}
+		if logFile != nil {
+			logFile.Close()
+		}
+	}()
 	return nil
 }
 

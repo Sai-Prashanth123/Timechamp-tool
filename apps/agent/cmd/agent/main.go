@@ -61,9 +61,18 @@ func run() {
 	cfg.OrgID = identity.OrgID
 	cfg.EmployeeID = identity.EmployeeID
 
-	// Auth token.
+	// Auth token — check env first (passed by tray on first launch), then keychain.
 	token, err := keychain.LoadToken()
 	if err != nil || token == "" {
+		if envToken := os.Getenv("TC_AGENT_TOKEN"); envToken != "" {
+			token = envToken
+			// Persist to keychain for future launches without the env var.
+			if saveErr := keychain.SaveToken(token); saveErr != nil {
+				log.Printf("Warning: could not save token to keychain: %v", saveErr)
+			}
+		}
+	}
+	if token == "" {
 		inviteToken := os.Getenv("TC_INVITE_TOKEN")
 		if inviteToken == "" {
 			log.Fatal("No auth token found. Run installer with TC_INVITE_TOKEN set.")
