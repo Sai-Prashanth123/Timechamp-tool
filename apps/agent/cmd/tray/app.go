@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"syscall"
 	"time"
 
 	"github.com/energye/systray"
@@ -87,6 +88,11 @@ func (a *App) Register(apiURL, inviteToken string) error {
 		"TC_API_URL="+apiURL,
 		"TC_AGENT_TOKEN="+agentToken,
 	)
+	// Detach from parent console so the agent doesn't receive Ctrl+C signals
+	// from terminal sessions that launched the tray.
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
+	}
 	if logFile != nil {
 		cmd.Stdout = logFile
 		cmd.Stderr = logFile
@@ -97,17 +103,10 @@ func (a *App) Register(apiURL, inviteToken string) error {
 		}
 		return fmt.Errorf("launch agent: %w", err)
 	}
-	// Detect early crash: wait 1 second and check the process is still alive.
-	go func() {
-		time.Sleep(1 * time.Second)
-		if err := cmd.Process.Signal(os.Signal(nil)); err != nil {
-			// Process already exited — read last log lines if available
-			_ = cmd.Wait()
-		}
-		if logFile != nil {
-			logFile.Close()
-		}
-	}()
+	// Close our handle to the log file; the child process keeps its own handle.
+	if logFile != nil {
+		logFile.Close()
+	}
 	return nil
 }
 

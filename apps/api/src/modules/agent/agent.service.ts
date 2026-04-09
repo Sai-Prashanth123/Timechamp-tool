@@ -84,7 +84,7 @@ export class AgentService {
         appName: e.appName,
         windowTitle: e.windowTitle ?? null,
         startedAt: new Date(e.startedAt),
-        durationSec: e.durationSec,
+        durationSec: e.durationSec ?? Math.round((e.durationMs ?? 0) / 1000),
         keystrokeCount: e.keystrokeCount ?? 0,
       }),
     );
