@@ -20,7 +20,10 @@ int hasAccessibility(int prompt) {
 }
 */
 import "C"
-import "sync/atomic"
+import (
+	"sync"
+	"sync/atomic"
+)
 
 // PermissionState holds the current permission status.
 type PermissionState struct {
@@ -31,12 +34,26 @@ type PermissionState struct {
 // GlobalPermissions is the singleton permission state checked by all capture functions.
 var GlobalPermissions = &PermissionState{}
 
+// accessibilityPrompted ensures we only ever show the Accessibility permission
+// dialog once per agent run. Repeated calls with prompt=1 every 60 s would
+// annoy users who have already made their choice.
+var accessibilityPrompted sync.Once
+
 // CheckAndRequestPermissions checks all permissions and prompts for missing ones.
-// Safe to call from multiple goroutines and repeatedly (re-checks current state).
+// The Accessibility dialog is shown at most once per process lifetime.
+// Screen recording status is re-checked on every call (no dialog, cheap syscall).
 func CheckAndRequestPermissions() {
 	GlobalPermissions.ScreenRecording.Store(C.hasScreenRecording() == 1)
-	// Accessibility: prompt=1 shows "TimeChamp wants to control this computer" dialog on first call.
-	GlobalPermissions.Accessibility.Store(C.hasAccessibility(1) == 1)
+	// Show the Accessibility dialog only on the first call. After the user
+	// grants or denies, re-check silently (prompt=0) on every subsequent call.
+	accessibilityPrompted.Do(func() {
+		GlobalPermissions.Accessibility.Store(C.hasAccessibility(1) == 1)
+	})
+	if GlobalPermissions.Accessibility.Load() {
+		return // already granted — no need to re-check
+	}
+	// Denied or not yet determined — re-check without prompting.
+	GlobalPermissions.Accessibility.Store(C.hasAccessibility(0) == 1)
 }
 
 // HasScreenRecording returns true if the agent can capture screen content.

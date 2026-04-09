@@ -244,11 +244,15 @@ func run() {
 	afkThreshold := time.Duration(cfg.IdleThreshold) * time.Second
 	isAFK := false
 
-	// Write PID file so the tray app can detect we are running.
+	// Write PID file atomically (temp file + rename) so the tray never reads a
+	// partial or empty file if the process crashes between open and write.
 	pidFile := filepath.Join(cfg.DataDir, "agent.pid")
 	if pidData, err := json.Marshal(os.Getpid()); err == nil {
 		_ = os.MkdirAll(cfg.DataDir, 0700)
-		_ = os.WriteFile(pidFile, pidData, 0600)
+		tmp := pidFile + ".tmp"
+		if writeErr := os.WriteFile(tmp, pidData, 0600); writeErr == nil {
+			_ = os.Rename(tmp, pidFile)
+		}
 	}
 	defer os.Remove(pidFile)
 

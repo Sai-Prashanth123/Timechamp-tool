@@ -34,22 +34,27 @@ func CaptureScreenshot(dir string) (string, error) {
 	}
 
 	// Decode the file screencapture wrote, resize, and re-encode at Q60.
+	// On any error after the file exists, remove it so it doesn't accumulate.
 	f, err := os.Open(path)
 	if err != nil {
+		os.Remove(path) //nolint:errcheck
 		return "", fmt.Errorf("open screenshot: %w", err)
 	}
 	img, err := jpeg.Decode(f)
 	f.Close()
 	if err != nil {
+		os.Remove(path) //nolint:errcheck
 		return "", fmt.Errorf("decode screenshot: %w", err)
 	}
 
 	data, err := resizeAndEncode(img)
 	if err != nil {
+		os.Remove(path) //nolint:errcheck
 		return "", fmt.Errorf("encode jpeg: %w", err)
 	}
 
 	if err := os.WriteFile(path, data, 0600); err != nil {
+		os.Remove(path) //nolint:errcheck
 		return "", fmt.Errorf("write file: %w", err)
 	}
 

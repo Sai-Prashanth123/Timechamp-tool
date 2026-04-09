@@ -3,11 +3,13 @@
 package capture
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -59,12 +61,19 @@ func sysctlUint64(name string) (uint64, error) {
 
 // vmStatUsedMB parses vm_stat output to estimate used memory in MiB.
 func vmStatUsedMB() (uint64, error) {
-	out, err := exec.Command("vm_stat").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "vm_stat").Output()
 	if err != nil {
 		return 0, err
 	}
 
-	const pageSize = 16384 // 16 KiB on Apple Silicon, 4 KiB on Intel — use 4096 as safe default
+	// Detect the actual VM page size at runtime: 4 KiB on Intel, 16 KiB on Apple Silicon.
+	// Using a hardcoded 16384 on Intel would report 4× too much memory used.
+	pageSize := uint64(os.Getpagesize())
+	if pageSize == 0 {
+		pageSize = 4096 // safe fallback
+	}
 	var activePages, wiredPages, compressedPages uint64
 
 	for _, line := range strings.Split(string(out), "\n") {
@@ -88,9 +97,12 @@ func parseVMStatLine(line, prefix string, out *uint64) {
 }
 
 // topCPUPercent runs a minimal `top` invocation to get system-wide CPU %.
+// A 10s timeout prevents blocking the metrics goroutine if top hangs.
 func topCPUPercent() (float64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	// top -l 1 -n 0 outputs one stats line; -stats avoids process table
-	out, err := exec.Command("top", "-l", "1", "-n", "0", "-stats", "pid").Output()
+	out, err := exec.CommandContext(ctx, "top", "-l", "1", "-n", "0", "-stats", "pid").Output()
 	if err != nil {
 		return 0, err
 	}

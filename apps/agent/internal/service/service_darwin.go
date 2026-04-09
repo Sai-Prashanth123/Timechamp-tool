@@ -56,16 +56,31 @@ type darwinManager struct{}
 
 func newManager() Manager { return &darwinManager{} }
 
+// userHome returns the user home directory, falling back to /tmp so we never
+// return an empty path that would cause plist writes to go to the filesystem root.
+func userHome() string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return home
+	}
+	// HOME may be unset in restricted launchd environments; try common paths.
+	for _, candidate := range []string{"/Users/" + os.Getenv("USER"), "/var/root"} {
+		if candidate != "/Users/" {
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate
+			}
+		}
+	}
+	return "/tmp"
+}
+
 // plistPath returns the path to the LaunchAgent plist.
 func plistPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "Library", "LaunchAgents", launchAgentLabel+".plist")
+	return filepath.Join(userHome(), "Library", "LaunchAgents", launchAgentLabel+".plist")
 }
 
 // logDir returns the directory where agent logs are written.
 func logDir() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "Library", "Logs", "TimeChamp")
+	return filepath.Join(userHome(), "Library", "Logs", "TimeChamp")
 }
 
 // Install writes the LaunchAgent plist and loads it with launchctl.

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -68,8 +69,9 @@ func (a *App) autoLaunchIfRegistered() {
 		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
 	}
 	// Agent manages its own rotating log file in DataDir — no stdout redirect needed.
-
-	_ = cmd.Start()
+	if err := cmd.Start(); err != nil {
+		log.Printf("autoLaunch: failed to start agent: %v", err)
+	}
 }
 
 // CheckSetup returns true if the agent is already registered (token in OS keychain).
@@ -135,10 +137,10 @@ func (a *App) Register(apiURL, inviteToken string) error {
 }
 
 // GetStatus returns whether the background agent process is running.
-func (a *App) GetStatus() map[string]interface{} {
+func (a *App) GetStatus() map[string]any {
 	cfg := config.Load()
 	running := a.isAgentRunning(cfg.DataDir)
-	return map[string]interface{}{"running": running}
+	return map[string]any{"running": running}
 }
 
 // isAgentRunning checks liveness via the health HTTP endpoint, falling back to

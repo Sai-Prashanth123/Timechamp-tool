@@ -3,10 +3,12 @@
 package capture
 
 import (
+	"context"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -107,8 +109,12 @@ func moduleFileNameEx(pid uint32) string {
 }
 
 // wmicProcessName falls back to `wmic process` for elevated/SYSTEM processes.
+// A 3-second timeout prevents the main loop from hanging if wmic stalls
+// (e.g. WMI service restart or corrupt WMI repository).
 func wmicProcessName(pid uint32) string {
-	cmd := exec.Command("wmic", "process", "where",
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "wmic", "process", "where",
 		"ProcessId="+uint32ToStr(pid), "get", "Name", "/format:value",
 	)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}

@@ -52,11 +52,14 @@ func (w *RotatingWriter) Close() error {
 
 func (w *RotatingWriter) rotate() error {
 	w.file.Close()
-	// Shift backups: .2→.3, .1→.2, current→.1 (remove .3 first)
-	os.Remove(w.path + ".3")
-	os.Rename(w.path+".2", w.path+".3")
-	os.Rename(w.path+".1", w.path+".2")
-	os.Rename(w.path, w.path+".1")
+	// Shift backups: .2→.3, .1→.2, current→.1 (remove .3 first).
+	// Renames are best-effort — a partial failure (e.g. cross-device rename,
+	// read-only filesystem) must not leave the writer permanently broken.
+	// We always try to open a fresh log file regardless of rename outcomes.
+	_ = os.Remove(w.path + ".3")
+	_ = os.Rename(w.path+".2", w.path+".3")
+	_ = os.Rename(w.path+".1", w.path+".2")
+	_ = os.Rename(w.path, w.path+".1")
 	return w.open()
 }
 

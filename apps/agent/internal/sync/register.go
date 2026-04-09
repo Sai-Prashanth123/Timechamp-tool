@@ -35,7 +35,10 @@ func Register(apiURL, inviteToken, hostname, osName, osVersion string) (token, e
 		OSVersion:   osVersion,
 	}
 
-	data, _ := json.Marshal(payload)
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", "", "", fmt.Errorf("marshal register payload: %w", err)
+	}
 	httpClient := &http.Client{Timeout: 15 * time.Second}
 
 	resp, err := httpClient.Post(

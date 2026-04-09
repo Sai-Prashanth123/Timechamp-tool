@@ -1,6 +1,8 @@
 package buffer
 
 import (
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -77,17 +79,11 @@ func (db *DB) ListUnsyncedActivity(limit int) ([]ActivityEvent, error) {
 	return events, rows.Err()
 }
 
-// MarkActivitySynced deletes the given activity event IDs (they've been uploaded).
+// MarkActivitySynced deletes the given activity event IDs in a single statement.
+// Using one DELETE…IN(…) instead of N individual deletes is atomic — either all
+// rows are removed or none are, preventing partial syncs on DB errors.
 func (db *DB) MarkActivitySynced(ids []int64) error {
-	if len(ids) == 0 {
-		return nil
-	}
-	for _, id := range ids {
-		if _, err := db.conn.Exec(`DELETE FROM activity_events WHERE id = ?`, id); err != nil {
-			return err
-		}
-	}
-	return nil
+	return deleteByIDs(db, "activity_events", ids)
 }
 
 // CountActivity returns the total number of activity records.
@@ -167,14 +163,9 @@ func (db *DB) ListUnsyncedKeystrokes(limit int) ([]KeystrokeEvent, error) {
 	return events, rows.Err()
 }
 
-// MarkKeystrokesSynced deletes the given keystroke record IDs.
+// MarkKeystrokesSynced deletes the given keystroke record IDs atomically.
 func (db *DB) MarkKeystrokesSynced(ids []int64) error {
-	for _, id := range ids {
-		if _, err := db.conn.Exec(`DELETE FROM keystroke_events WHERE id = ?`, id); err != nil {
-			return err
-		}
-	}
-	return nil
+	return deleteByIDs(db, "keystroke_events", ids)
 }
 
 // SystemMetricsEvent is a point-in-time resource snapshot.
@@ -225,14 +216,27 @@ func (db *DB) ListUnsyncedMetrics(limit int) ([]SystemMetricsEvent, error) {
 	return events, rows.Err()
 }
 
-// MarkMetricsSynced deletes the given metrics record IDs.
+// MarkMetricsSynced deletes the given metrics record IDs atomically.
 func (db *DB) MarkMetricsSynced(ids []int64) error {
-	for _, id := range ids {
-		if _, err := db.conn.Exec(`DELETE FROM system_metrics WHERE id = ?`, id); err != nil {
-			return err
-		}
+	return deleteByIDs(db, "system_metrics", ids)
+}
+
+// deleteByIDs deletes all rows with the given IDs from table in a single
+// atomic statement. Building one DELETE…IN(?) is both faster and safer than N
+// individual deletes: either all rows go or none do, preventing partial syncs.
+func deleteByIDs(db *DB, table string, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
 	}
-	return nil
+	placeholders := strings.Repeat("?,", len(ids))
+	placeholders = placeholders[:len(placeholders)-1] // trim trailing comma
+	query := fmt.Sprintf("DELETE FROM %s WHERE id IN (%s)", table, placeholders)
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	_, err := db.conn.Exec(query, args...)
+	return err
 }
 
 // PruneSynced removes records older than maxDays days that have already been
