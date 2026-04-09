@@ -54,10 +54,10 @@ func Load() *Config {
 	return &Config{
 		APIURL:             getEnv("TC_API_URL", "https://api.timechamp.io/api/v1"),
 		OrgID:              getEnv("TC_ORG_ID", ""),
-		ScreenshotInterval: getEnvInt("TC_SCREENSHOT_INTERVAL", 300),
-		SyncInterval:       getEnvInt("TC_SYNC_INTERVAL", 30),
-		IdleThreshold:      getEnvInt("TC_IDLE_THRESHOLD", 180),
-		MaxBufferDays:      getEnvInt("TC_MAX_BUFFER_DAYS", 7),
+		ScreenshotInterval: getEnvPositiveInt("TC_SCREENSHOT_INTERVAL", 300),
+		SyncInterval:       getEnvPositiveInt("TC_SYNC_INTERVAL", 30),
+		IdleThreshold:      getEnvPositiveInt("TC_IDLE_THRESHOLD", 180),
+		MaxBufferDays:      getEnvPositiveInt("TC_MAX_BUFFER_DAYS", 7),
 		DataDir:            getEnv("TC_DATA_DIR", defaultDataDir()),
 		StreamingEnabled:   getEnvBool("TC_STREAMING_ENABLED", false),
 		StreamingURL:       getEnv("TC_STREAMING_URL", ""),
@@ -96,6 +96,16 @@ func getEnvInt(key string, fallback int) int {
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil {
+		return fallback
+	}
+	return n
+}
+
+// getEnvPositiveInt reads an integer env var and returns fallback if the value
+// is missing, unparseable, or <= 0. Prevents panic from time.NewTicker(0/-n).
+func getEnvPositiveInt(key string, fallback int) int {
+	n := getEnvInt(key, fallback)
+	if n <= 0 {
 		return fallback
 	}
 	return n

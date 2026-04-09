@@ -186,11 +186,11 @@ func run() {
 
 	// Browser extension URL relay listener.
 	urlCache.Store("")
-	go listenBrowserURLs()
+	safeGo("listenBrowserURLs", listenBrowserURLs)
 
 	// Auto-update checker (hourly, skipped in dev builds).
 	if Version != "dev" {
-		go func() {
+		safeGo("auto-updater", func() {
 			ticker := time.NewTicker(1 * time.Hour)
 			defer ticker.Stop()
 			for range ticker.C {
@@ -203,7 +203,7 @@ func run() {
 					log.Printf("Auto-update check: %v", err)
 				}
 			}
-		}()
+		})
 	}
 
 	// ── Heartbeat queue ───────────────────────────────────────────────────────
@@ -259,13 +259,13 @@ func run() {
 
 	// Check permissions at startup and re-check every 60s (macOS only — no-op on other platforms).
 	capture.CheckAndRequestPermissions()
-	go func() {
+	safeGo("permission-checker", func() {
 		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
 			capture.CheckAndRequestPermissions()
 		}
-	}()
+	})
 
 	log.Printf("Agent started. Screenshot every %ds, sync every %ds, idle threshold %ds",
 		cfg.ScreenshotInterval, cfg.SyncInterval, cfg.IdleThreshold)
@@ -572,6 +572,24 @@ func listenBrowserURLs() {
 
 func osVersion() string {
 	return fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)
+}
+
+// safeGo runs fn in a new goroutine with panic recovery.
+// On panic it logs the stack trace but does NOT re-panic — goroutine panics
+// cannot propagate to the main goroutine anyway, so we log and let the
+// goroutine exit cleanly. The main crash reporter handles panics in the
+// main event loop via defer crashReporter.Recover().
+func safeGo(name string, fn func()) {
+	go func() {
+		defer func() {
+			if v := recover(); v != nil {
+				buf := make([]byte, 8192)
+				n := runtime.Stack(buf, false)
+				log.Printf("PANIC in goroutine %s: %v\n%s", name, v, buf[:n])
+			}
+		}()
+		fn()
+	}()
 }
 
 // updaterPublicKey is the ECDSA-P256 PEM public key for verifying update binaries.

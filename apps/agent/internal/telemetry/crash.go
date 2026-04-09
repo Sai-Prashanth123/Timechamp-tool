@@ -6,11 +6,12 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
+
+	agentlog "github.com/timechamp/agent/internal/logging"
 )
 
 // CrashReport is sent to /api/v1/agent/crash on unrecovered panic.
@@ -103,15 +104,19 @@ func (r *Reporter) send(report CrashReport) {
 	r.writeLocal(report)
 }
 
+// crashLogMaxBytes caps crash.log at 5 MB (3 rotated backups = 20 MB total).
+const crashLogMaxBytes = 5 * 1024 * 1024
+
 func (r *Reporter) writeLocal(report CrashReport) {
 	line, _ := json.Marshal(report)
 	path := filepath.Join(r.dataDir, "crash.log")
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	w, err := agentlog.NewRotatingWriter(path, crashLogMaxBytes)
 	if err != nil {
-		log.Printf("crash reporter: could not write crash.log: %v", err)
+		log.Printf("crash reporter: could not open crash.log: %v", err)
 		return
 	}
-	defer f.Close()
-	f.Write(line)
-	f.WriteString("\n")
+	defer w.Close()
+	w.Write(line)           //nolint:errcheck
+	w.Write([]byte("\n"))   //nolint:errcheck
 }
+

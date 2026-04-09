@@ -3,10 +3,12 @@
 package capture
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // idleSeconds returns the number of seconds the system has been idle (no
@@ -15,10 +17,16 @@ import (
 // It queries IOHIDSystem via ioreg(8), which is available on every macOS
 // installation without additional software.  The idle time is reported in
 // nanoseconds under the key "HIDIdleTime".
+// ioregTimeout caps how long we wait for ioreg. A kernel hang can cause it
+// to block indefinitely, which would freeze the main event loop.
+const ioregTimeout = 5 * time.Second
+
 func idleSeconds() (int, error) {
 	// ioreg -c IOHIDSystem -d 4 prints the IOHIDSystem entry including
 	// HIDIdleTime (nanoseconds since last user input).
-	out, err := exec.Command("ioreg", "-c", "IOHIDSystem", "-d", "4").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), ioregTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "ioreg", "-c", "IOHIDSystem", "-d", "4").Output()
 	if err != nil {
 		return 0, fmt.Errorf("ioreg: %w", err)
 	}

@@ -3,6 +3,8 @@
 package capture
 
 import (
+	"log"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -12,6 +14,15 @@ import (
 // Falls back to safe zero-values when xdotool is unavailable or when the
 // desktop session does not expose an active window (e.g. on a bare VT).
 func getActiveWindow() (ActiveWindow, error) {
+	// Wayland sessions are not supported by xdotool (X11-only).
+	// Detect early and log once so the user knows why activity tracking is missing.
+	if os.Getenv("WAYLAND_DISPLAY") != "" {
+		log.Printf("Warning: Wayland session detected. xdotool requires X11. " +
+			"Activity window tracking is unavailable. " +
+			"Run with XWayland or set DISPLAY to enable tracking.")
+		return ActiveWindow{AppName: "Unknown", WindowTitle: ""}, nil
+	}
+
 	// Get the active window ID
 	idOut, err := exec.Command("xdotool", "getactivewindow").Output()
 	if err != nil {

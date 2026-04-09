@@ -3,9 +3,11 @@
 package capture
 
 import (
+	"context"
 	"encoding/json"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // jxaGetWindowScript is a JavaScript for Automation (JXA) script that returns
@@ -107,8 +109,14 @@ type jxaWindowResult struct {
 //   - Single subprocess invocation (no per-browser script spawning)
 //   - Structured JSON output — no string parsing
 //   - Locates main window via AXMain attribute for multi-window apps
+// jxaTimeout is the maximum time we wait for osascript / System Events.
+// A frozen or unresponsive app can cause osascript to block indefinitely.
+const jxaTimeout = 5 * time.Second
+
 func getActiveWindow() (ActiveWindow, error) {
-	cmd := exec.Command("osascript", "-l", "JavaScript", "-e", jxaGetWindowScript)
+	ctx, cancel := context.WithTimeout(context.Background(), jxaTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "osascript", "-l", "JavaScript", "-e", jxaGetWindowScript)
 	out, err := cmd.Output()
 	if err != nil {
 		// Accessibility permission not granted or System Events unavailable.
@@ -163,7 +171,9 @@ func fallbackGetActiveWindow() ActiveWindow {
 		return appName & "|" & windowTitle
 	end tell`
 
-	out, err := exec.Command("osascript", "-e", script).Output()
+	ctx, cancel := context.WithTimeout(context.Background(), jxaTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "osascript", "-e", script).Output()
 	if err != nil {
 		return ActiveWindow{AppName: "Unknown"}
 	}
