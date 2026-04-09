@@ -7,7 +7,11 @@
       "Bash(go build:*)",
       "Bash(python -c \"import sys; print\\(sys.version\\)\")",
       "Bash(npx tsc:*)",
-      "Bash(npx jest:*)"
+      "Bash(npx jest:*)",
+      "Bash(PGPASSWORD=\"postgres0@123\" psql -U postgres -h localhost -c \"CREATE DATABASE timechamp;\")",
+      "Bash(go env:*)",
+      "Bash(grep -n \"func Set\" \"$\\(go env GOPATH\\)/pkg/mod/github.com/energye/systray@v1.0.3/systray_windows.go\")",
+      "Bash(grep -n \"func Set\" \"$\\(go env GOPATH\\)/pkg/mod/github.com/energye/systray@v1.0.3/systray_unix.go\")"
     ]
   }
 }
