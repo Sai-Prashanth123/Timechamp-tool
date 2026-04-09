@@ -13,7 +13,7 @@ export class WebhookDelivery {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ name: 'endpoint_id', nullable: true })
+  @Column({ name: 'endpoint_id', type: 'varchar', nullable: true })
   endpointId: string | null;
 
   @ManyToOne(() => WebhookEndpoint, (e) => e.deliveries, {
@@ -29,7 +29,7 @@ export class WebhookDelivery {
   @Column({ type: 'jsonb', default: {} })
   payload: Record<string, unknown>;
 
-  @Column({ name: 'status_code', nullable: true })
+  @Column({ name: 'status_code', type: 'integer', nullable: true })
   statusCode: number | null;
 
   @Column({ name: 'attempt_count', default: 1 })

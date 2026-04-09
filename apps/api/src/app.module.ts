@@ -51,7 +51,7 @@ import { AdminModule } from './modules/admin/admin.module';
       isGlobal: true,
       validationSchema: Joi.object({
         DATABASE_URL: Joi.string().required(),
-        REDIS_URL: Joi.string().required(),
+        REDIS_URL: Joi.string().optional(),
         JWT_SECRET: Joi.string().min(32).required(),
         JWT_EXPIRES_IN: Joi.string().default('15m'),
         JWT_REFRESH_SECRET: Joi.string().min(32).required(),
@@ -79,12 +79,6 @@ import { AdminModule } from './modules/admin/admin.module';
         WS_CORS_ORIGIN: Joi.string().optional(),
         DAILY_BW_CAP_MB: Joi.number().default(500),
         SESSION_MAX_HOURS: Joi.number().default(8),
-        SMTP_HOST: Joi.string().optional(),
-        SMTP_PORT: Joi.number().default(587),
-        SMTP_SECURE: Joi.boolean().default(false),
-        SMTP_USER: Joi.string().optional(),
-        SMTP_PASS: Joi.string().optional(),
-        SMTP_FROM: Joi.string().optional(),
       }),
     }),
     TypeOrmModule.forRootAsync({
@@ -118,7 +112,8 @@ import { AdminModule } from './modules/admin/admin.module';
           AuditLog,
         ],
         migrations: ['dist/database/migrations/*.js'],
-        migrationsRun: config.get('NODE_ENV') !== 'production',
+        migrationsRun: false,
+        synchronize: config.get('NODE_ENV') !== 'production',
         logging: config.get('NODE_ENV') !== 'production',
         ssl:
           config.get('NODE_ENV') === 'production'

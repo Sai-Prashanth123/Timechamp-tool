@@ -47,7 +47,7 @@ export class AuthService {
       '-' +
       randomBytes(3).toString('hex');
 
-    return this.dataSource.transaction(async (manager) => {
+    const newUser = await this.dataSource.transaction(async (manager) => {
       const existingSlug = await manager.findOne(Organization, {
         where: { slug },
       });
@@ -85,8 +85,10 @@ export class AuthService {
       });
       await manager.save(user);
 
-      return this.generateTokens(user);
+      return user;
     });
+
+    return this.generateTokens(newUser);
   }
 
   async login(dto: LoginDto) {

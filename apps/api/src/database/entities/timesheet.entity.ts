@@ -48,7 +48,7 @@ export class Timesheet {
   @Column({ name: 'submitted_at', type: 'timestamptz', nullable: true })
   submittedAt: Date | null;
 
-  @Column({ name: 'approved_by', nullable: true })
+  @Column({ name: 'approved_by', type: 'varchar', nullable: true })
   approvedBy: string | null;
 
   @Column({ name: 'approved_at', type: 'timestamptz', nullable: true })

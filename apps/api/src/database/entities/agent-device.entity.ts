@@ -23,13 +23,13 @@ export class AgentDevice {
   @Column({ name: 'device_token', unique: true })
   deviceToken: string;
 
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   hostname: string | null;
 
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   platform: string | null;
 
-  @Column({ name: 'agent_version', nullable: true })
+  @Column({ name: 'agent_version', type: 'varchar', nullable: true })
   agentVersion: string | null;
 
   @Column({ name: 'last_seen_at', nullable: true, type: 'timestamptz' })

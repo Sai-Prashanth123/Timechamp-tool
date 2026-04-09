@@ -13,7 +13,7 @@ export class AlertEvent {
   @Column({ name: 'organization_id' })
   organizationId: string;
 
-  @Column({ name: 'rule_id', nullable: true })
+  @Column({ name: 'rule_id', type: 'varchar', nullable: true })
   ruleId: string | null;
 
   @Column({ name: 'user_id' })
@@ -34,7 +34,7 @@ export class AlertEvent {
   @Column({ name: 'acknowledged_at', type: 'timestamptz', nullable: true })
   acknowledgedAt: Date | null;
 
-  @Column({ name: 'acknowledged_by', nullable: true })
+  @Column({ name: 'acknowledged_by', type: 'varchar', nullable: true })
   acknowledgedBy: string | null;
 
   @CreateDateColumn({ name: 'created_at' })

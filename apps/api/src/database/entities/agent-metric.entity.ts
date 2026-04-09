@@ -33,7 +33,7 @@ export class AgentMetric {
   @Column('bigint', { default: 0 })
   agentMemMb: number;
 
-  @Column()
+  @Column({ type: 'timestamptz' })
   recordedAt: Date;
 
   @CreateDateColumn()

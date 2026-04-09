@@ -27,7 +27,7 @@ export class Subscription {
   @Column({ nullable: true })
   stripeSubscriptionId: string;
 
-  @Column({ nullable: true, default: 'starter' })
+  @Column({ type: 'varchar', nullable: true, default: 'starter' })
   plan: string | null;
 
   @Column({ nullable: true })

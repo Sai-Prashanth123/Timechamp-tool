@@ -11,7 +11,7 @@ export function useMonitoringSocket() {
 
   const role = session?.user?.role;
   const token = (session as any)?.accessToken as string | undefined;
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3000';
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
   useEffect(() => {
     if (!token || (role !== 'admin' && role !== 'manager')) return;

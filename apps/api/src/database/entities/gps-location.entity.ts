@@ -25,7 +25,7 @@ export class GpsLocation {
   @Column({ type: 'decimal', precision: 8, scale: 2, nullable: true })
   accuracy: number | null;
 
-  @Column({ name: 'battery_level', nullable: true })
+  @Column({ name: 'battery_level', type: 'float', nullable: true })
   batteryLevel: number | null;
 
   @Column({ name: 'recorded_at', type: 'timestamptz' })

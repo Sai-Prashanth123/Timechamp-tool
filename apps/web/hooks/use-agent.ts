@@ -17,7 +17,7 @@ export function useAgentDevices() {
     queryKey: ['agent-devices'],
     queryFn: async () => {
       const { data } = await api.get('/agent/devices');
-      return data as AgentDevice[];
+      return data.data as AgentDevice[];
     },
   });
 }
@@ -26,7 +26,7 @@ export function useGenerateInviteToken() {
   return useMutation({
     mutationFn: async () => {
       const { data } = await api.post('/agent/invite-token');
-      return data as { token: string };
+      return data.data as { token: string };
     },
     onError: () => toast.error('Failed to generate invite token'),
   });

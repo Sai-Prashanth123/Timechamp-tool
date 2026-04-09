@@ -30,13 +30,13 @@ export class TimeEntry {
   @Column({ name: 'organization_id' })
   organizationId: string;
 
-  @Column({ name: 'attendance_id', nullable: true })
+  @Column({ name: 'attendance_id', type: 'varchar', nullable: true })
   attendanceId: string | null;
 
-  @Column({ name: 'project_id', nullable: true })
+  @Column({ name: 'project_id', type: 'varchar', nullable: true })
   projectId: string | null;
 
-  @Column({ name: 'task_id', nullable: true })
+  @Column({ name: 'task_id', type: 'varchar', nullable: true })
   taskId: string | null;
 
   @Column({ name: 'started_at', type: 'timestamptz' })

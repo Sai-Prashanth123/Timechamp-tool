@@ -12,10 +12,12 @@ async function bootstrap() {
     rawBody: true,
   });
 
-  // Redis IO adapter for WebSocket horizontal scaling
-  const redisIoAdapter = new RedisIoAdapter(app);
-  await redisIoAdapter.connectToRedis();
-  app.useWebSocketAdapter(redisIoAdapter);
+  // Redis IO adapter for WebSocket horizontal scaling (skip if REDIS_URL not set)
+  if (process.env.REDIS_URL) {
+    const redisIoAdapter = new RedisIoAdapter(app);
+    await redisIoAdapter.connectToRedis();
+    app.useWebSocketAdapter(redisIoAdapter);
+  }
 
   app.setGlobalPrefix('api/v1');
   const allowedOrigin = process.env.APP_URL ?? 'http://localhost:3000';

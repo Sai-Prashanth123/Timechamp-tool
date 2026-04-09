@@ -26,7 +26,7 @@ export class ActivityEvent {
   @Column({ name: 'app_name', length: 255 })
   appName: string;
 
-  @Column({ name: 'window_title', length: 500, nullable: true })
+  @Column({ name: 'window_title', type: 'varchar', length: 500, nullable: true })
   windowTitle: string | null;
 
   @Column({ name: 'started_at', type: 'timestamptz' })

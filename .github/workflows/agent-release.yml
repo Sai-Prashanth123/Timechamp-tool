@@ -48,9 +48,10 @@ jobs:
           files: apps/agent/timechamp-agent-${{ matrix.suffix }}${{ matrix.ext || '' }}
           generate_release_notes: false
 
-  # ── All-in-one setup installer (agent embedded inside setup exe) ────────────
-  build-setup:
-    name: Setup ${{ matrix.suffix }}
+  # ── Desktop tray app (Wails v2 native window + system tray) ────────────────
+  # Requires native runners — Wails needs the platform's webview toolkit (CGO).
+  build-tray:
+    name: Tray ${{ matrix.suffix }}
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
@@ -67,7 +68,18 @@ jobs:
           go-version: '1.22'
           cache-dependency-path: apps/agent/go.sum
 
-      - name: Build agent binary (to embed)
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      - name: Install Linux WebKit dependencies
+        if: matrix.runner == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.0-dev libgtk-3-dev pkg-config
+
+      - name: Build headless agent binary (to embed in tray app)
         shell: bash
         env:
           GOOS: ${{ matrix.goos }}
@@ -75,28 +87,21 @@ jobs:
           CGO_ENABLED: '0'
         run: |
           cd apps/agent
-          rm -f cmd/setup/agent_bin
           go build \
             -ldflags "-w -s -X main.Version=${{ github.ref_name }} -X main.BuildDate=$(date -u +%Y-%m-%d)" \
-            -o cmd/setup/agent_bin \
+            -o cmd/tray/agent_bin${{ matrix.ext || '' }} \
             ./cmd/agent
 
-      - name: Build setup installer (with agent embedded)
+      - name: Build tray app with Wails
         shell: bash
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: '0'
         run: |
-          cd apps/agent
-          EXTRA=""
-          if [ "${{ matrix.goos }}" = "windows" ]; then EXTRA="-H=windowsgui"; fi
-          go build \
-            -ldflags "-w -s ${EXTRA} -X main.Version=${{ github.ref_name }}" \
-            -o timechamp-setup-${{ matrix.suffix }}${{ matrix.ext }} \
-            ./cmd/setup
+          cd apps/agent/cmd/tray
+          wails build \
+            -platform ${{ matrix.goos }}/${{ matrix.goarch }} \
+            -ldflags "-X main.Version=${{ github.ref_name }}" \
+            -o timechamp-tray-${{ matrix.suffix }}${{ matrix.ext || '' }}
 
       - uses: softprops/action-gh-release@v2
         with:
-          files: apps/agent/timechamp-setup-${{ matrix.suffix }}${{ matrix.ext }}
+          files: apps/agent/cmd/tray/timechamp-tray-${{ matrix.suffix }}${{ matrix.ext || '' }}
           generate_release_notes: false

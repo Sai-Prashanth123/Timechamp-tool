@@ -24,7 +24,7 @@ export class Task {
   @Column({ name: 'organization_id' })
   organizationId: string;
 
-  @Column({ name: 'assignee_id', nullable: true })
+  @Column({ name: 'assignee_id', type: 'varchar', nullable: true })
   assigneeId: string | null;
 
   @Column({ length: 255 })
@@ -54,7 +54,7 @@ export class Task {
   @Column({ type: 'integer', default: 0 })
   position: number;
 
-  @Column({ name: 'created_by', nullable: true })
+  @Column({ name: 'created_by', type: 'varchar', nullable: true })
   createdBy: string | null;
 
   @CreateDateColumn({ name: 'created_at' })

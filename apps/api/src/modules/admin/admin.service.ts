@@ -59,8 +59,8 @@ export class AdminService {
       completedTasks,
       subscriptionStatus: subscription?.status ?? null,
       subscriptionPlan: subscription?.plan ?? null,
-      seatsUsed: subscription?.quantity ?? activeUsers,
-      seatsTotal: subscription?.quantity ?? 0,
+      seatsUsed: activeUsers,
+      seatsTotal: subscription?.seats ?? 0,
     };
   }
 

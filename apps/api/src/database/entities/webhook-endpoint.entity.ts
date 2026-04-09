@@ -19,7 +19,7 @@ export class WebhookEndpoint {
   @Column({ length: 500 })
   url: string;
 
-  @Column({ length: 255, nullable: true })
+  @Column({ type: 'varchar', length: 255, nullable: true })
   secret: string | null;
 
   @Column({ type: 'text', array: true, default: [] })

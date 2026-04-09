@@ -30,7 +30,7 @@ export class User {
   @Column({ length: 255 })
   email: string;
 
-  @Column({ select: false })
+  @Column({ type: 'varchar', select: false })
   passwordHash: string;
 
   @Column({ length: 255 })
@@ -42,7 +42,7 @@ export class User {
   @Column({ type: 'enum', enum: UserRole, default: UserRole.EMPLOYEE })
   role: UserRole;
 
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   avatarUrl: string;
 
   @Column({ default: false })
@@ -54,7 +54,7 @@ export class User {
   @Column({ name: 'agent_token', type: 'uuid', nullable: true, unique: true, select: false })
   agentToken: string | null;
 
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   invitedBy: string;
 
   @CreateDateColumn()

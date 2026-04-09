@@ -1,0 +1,14 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Remove default webview context menu on right-click */
+* {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+input {
+  -webkit-user-select: text;
+  user-select: text;
+}
