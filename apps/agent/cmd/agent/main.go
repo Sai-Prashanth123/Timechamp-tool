@@ -198,6 +198,14 @@ func run() {
 	afkThreshold := time.Duration(cfg.IdleThreshold) * time.Second
 	isAFK := false
 
+	// Write PID file so the tray app can detect we are running.
+	pidFile := filepath.Join(cfg.DataDir, "agent.pid")
+	if pidData, err := json.Marshal(os.Getpid()); err == nil {
+		_ = os.MkdirAll(cfg.DataDir, 0700)
+		_ = os.WriteFile(pidFile, pidData, 0600)
+	}
+	defer os.Remove(pidFile)
+
 	log.Printf("Agent started. Screenshot every %ds, sync every %ds, idle threshold %ds",
 		cfg.ScreenshotInterval, cfg.SyncInterval, cfg.IdleThreshold)
 
