@@ -1,3 +1,5 @@
+//go:build windows
+
 // Package main is the TimeChamp Agent desktop tray application.
 // Built with Wails v2 — renders a native OS window (no browser) using the
 // platform's built-in webview (WebView2/WKWebView/WebKitGTK).

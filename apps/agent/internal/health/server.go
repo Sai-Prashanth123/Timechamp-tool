@@ -4,6 +4,7 @@ package health
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"time"
 )
@@ -37,7 +38,9 @@ func New(version string) *Server {
 
 func (s *Server) Start() {
 	go func() {
-		_ = s.server.ListenAndServe()
+		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("health server: %v (port 27183 may already be in use)", err)
+		}
 	}()
 }
 

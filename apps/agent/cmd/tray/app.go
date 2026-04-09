@@ -1,3 +1,5 @@
+//go:build windows
+
 package main
 
 import (
@@ -90,6 +92,7 @@ func (a *App) Ping(apiURL string) error {
 	if err != nil {
 		return fmt.Errorf("cannot reach API: %w", err)
 	}
+	defer resp.Body.Close()
 	if resp.StatusCode >= 500 {
 		return fmt.Errorf("API returned status %d", resp.StatusCode)
 	}
