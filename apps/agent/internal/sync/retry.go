@@ -66,9 +66,6 @@ func WithRetry(cfg RetryConfig, fn func() (permanent bool, err error)) error {
 		}
 		time.Sleep(sleep)
 		// Grow interval with cap.
-		interval = time.Duration(float64(interval) * cfg.Multiplier)
-		if interval > cfg.MaxInterval {
-			interval = cfg.MaxInterval
-		}
+		interval = min(time.Duration(float64(interval)*cfg.Multiplier), cfg.MaxInterval)
 	}
 }

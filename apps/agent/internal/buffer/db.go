@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -123,4 +124,89 @@ func (db *DB) migrate() error {
 	// Stamp schema version so future migrations can detect upgrades.
 	_, err = db.conn.Exec(`PRAGMA user_version = 1`)
 	return err
+}
+
+// CapBuffer trims the oldest unsynced rows from each table so that no table
+// exceeds its per-table limit. Screenshots use maxRows/5 because they are large.
+// The first error encountered is returned; subsequent tables are still processed.
+func (db *DB) CapBuffer(maxRows int) error {
+	type tableLimit struct {
+		table string
+		limit int
+	}
+	screenshotLimit := max(maxRows/5, 1)
+	tables := []tableLimit{
+		{"activity_events", maxRows},
+		{"screenshots", screenshotLimit},
+		{"keystroke_events", maxRows},
+		{"system_metrics", maxRows},
+	}
+
+	var firstErr error
+	for _, tl := range tables {
+		var count int
+		row := db.conn.QueryRow(
+			fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE synced = 0`, tl.table),
+		)
+		if err := row.Scan(&count); err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("cap buffer count %s: %w", tl.table, err)
+			}
+			continue
+		}
+		overflow := count - tl.limit
+		if overflow <= 0 {
+			continue
+		}
+		_, err := db.conn.Exec(fmt.Sprintf(
+			`DELETE FROM %s WHERE id IN (SELECT id FROM %s WHERE synced = 0 ORDER BY id ASC LIMIT %d)`,
+			tl.table, tl.table, overflow,
+		))
+		if err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("cap buffer trim %s: %w", tl.table, err)
+		}
+	}
+	return firstErr
+}
+
+// CountAll returns the number of unsynced rows in each of the four buffer tables.
+// Map keys: "activity", "screenshots", "keystrokes", "metrics".
+func (db *DB) CountAll() (map[string]int, error) {
+	type tableKey struct {
+		table string
+		key   string
+	}
+	tables := []tableKey{
+		{"activity_events", "activity"},
+		{"screenshots", "screenshots"},
+		{"keystroke_events", "keystrokes"},
+		{"system_metrics", "metrics"},
+	}
+
+	counts := make(map[string]int, len(tables))
+	for _, tk := range tables {
+		var n int
+		row := db.conn.QueryRow(
+			fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE synced = 0`, tk.table),
+		)
+		if err := row.Scan(&n); err != nil {
+			return counts, fmt.Errorf("count %s: %w", tk.table, err)
+		}
+		counts[tk.key] = n
+	}
+	return counts, nil
+}
+
+// IsDiskFull returns true when err indicates the host filesystem or SQLite
+// database has no space left. Use this to emit a clear operator warning
+// instead of logging a cryptic sqlite error code.
+func IsDiskFull(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "disk full") ||
+		strings.Contains(msg, "no space left") ||
+		strings.Contains(msg, "sqlite_full") ||
+		strings.Contains(msg, "database or disk is full")
 }

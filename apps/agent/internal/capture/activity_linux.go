@@ -7,6 +7,12 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
+)
+
+var (
+	warnWayland   sync.Once
+	warnXdotool   sync.Once
 )
 
 // getActiveWindow returns the focused application and window title on Linux
@@ -15,17 +21,25 @@ import (
 // desktop session does not expose an active window (e.g. on a bare VT).
 func getActiveWindow() (ActiveWindow, error) {
 	// Wayland sessions are not supported by xdotool (X11-only).
-	// Detect early and log once so the user knows why activity tracking is missing.
+	// Warn once so the user knows why activity tracking is missing.
 	if os.Getenv("WAYLAND_DISPLAY") != "" {
-		log.Printf("Warning: Wayland session detected. xdotool requires X11. " +
-			"Activity window tracking is unavailable. " +
-			"Run with XWayland or set DISPLAY to enable tracking.")
+		warnWayland.Do(func() {
+			log.Printf("Warning: Wayland session detected. xdotool requires X11. " +
+				"Activity window tracking is unavailable. " +
+				"Run with XWayland or set DISPLAY to enable tracking.")
+		})
 		return ActiveWindow{AppName: "Unknown", WindowTitle: ""}, nil
 	}
 
 	// Get the active window ID
 	idOut, err := exec.Command("xdotool", "getactivewindow").Output()
 	if err != nil {
+		warnXdotool.Do(func() {
+			if _, lookErr := exec.LookPath("xdotool"); lookErr != nil {
+				log.Printf("Warning: xdotool not found. Activity window tracking is disabled. " +
+					"Install with: apt install xdotool  (or your distro's equivalent).")
+			}
+		})
 		return ActiveWindow{AppName: "Unknown", WindowTitle: ""}, nil
 	}
 	winID := strings.TrimSpace(string(idOut))

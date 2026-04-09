@@ -221,7 +221,7 @@ func run() {
 		startedAt := e.Timestamp
 		endedAt := e.Timestamp.Add(e.Duration)
 
-		_ = db.InsertActivity(buffer.ActivityEvent{
+		if err := db.InsertActivity(buffer.ActivityEvent{
 			EmployeeID:  cfg.EmployeeID,
 			OrgID:       cfg.OrgID,
 			AppName:     e.Data["app"],
@@ -231,7 +231,11 @@ func run() {
 			DurationMs:  e.Duration.Milliseconds(),
 			StartedAt:   startedAt,
 			EndedAt:     endedAt,
-		})
+		}); err != nil {
+			if buffer.IsDiskFull(err) {
+				log.Printf("CRITICAL: disk full — cannot write activity to buffer. Free disk space to resume recording.")
+			}
+		}
 	})
 
 	// ── AFK state machine ─────────────────────────────────────────────────────
@@ -400,12 +404,16 @@ func run() {
 				log.Printf("Screenshot failed: %v", err)
 				continue
 			}
-			_ = db.InsertScreenshot(buffer.ScreenshotRecord{
+			if err := db.InsertScreenshot(buffer.ScreenshotRecord{
 				EmployeeID: cfg.EmployeeID,
 				OrgID:      cfg.OrgID,
 				LocalPath:  path,
 				CapturedAt: time.Now(),
-			})
+			}); err != nil {
+				if buffer.IsDiskFull(err) {
+					log.Printf("CRITICAL: disk full — cannot store screenshot. Free disk space to resume recording.")
+				}
+			}
 
 		// ── Input counts ───────────────────────────────────────────────────────
 		case <-inputTicker.C:
@@ -426,7 +434,7 @@ func run() {
 			if err != nil {
 				continue
 			}
-			_ = db.InsertMetrics(buffer.SystemMetricsEvent{
+			if err := db.InsertMetrics(buffer.SystemMetricsEvent{
 				EmployeeID:      cfg.EmployeeID,
 				OrgID:           cfg.OrgID,
 				CPUPercent:      m.CPUPercent,
@@ -435,7 +443,9 @@ func run() {
 				AgentCPUPercent: m.AgentCPUPercent,
 				AgentMemMB:      m.AgentMemMB,
 				RecordedAt:      time.Now(),
-			})
+			}); err != nil && buffer.IsDiskFull(err) {
+				log.Printf("CRITICAL: disk full — cannot write metrics to buffer.")
+			}
 			if m.AgentMemMB > 100 {
 				log.Printf("Warning: agent RAM %d MiB — check for memory leak", m.AgentMemMB)
 			}
@@ -503,10 +513,16 @@ func run() {
 				log.Printf("Config updated: screenshot interval → %ds", newOrgCfg.ScreenshotIntervalSec)
 			}
 
-		// ── Daily prune + WAL checkpoint ──────────────────────────────────────
+		// ── Daily prune + buffer cap + WAL checkpoint ─────────────────────────
 		case <-pruneTicker.C:
 			if err := db.PruneSynced(cfg.MaxBufferDays); err != nil {
 				log.Printf("Prune error: %v", err)
+			}
+			// Cap unsynced rows so the buffer can't grow unbounded during long
+			// offline periods (e.g. 7-day internet outage).
+			const maxBufferedRows = 10_000
+			if err := db.CapBuffer(maxBufferedRows); err != nil {
+				log.Printf("Buffer cap error: %v", err)
 			}
 			if err := db.Checkpoint(); err != nil {
 				log.Printf("WAL checkpoint error: %v", err)
@@ -517,7 +533,8 @@ func run() {
 			if !client.IsAvailable() {
 				continue
 			}
-			buffered, _ := db.CountActivity()
+			counts, _ := db.CountAll()
+			buffered := counts["activity"]
 			t := telemetryCollector.Collect(lastSyncSuccess, lastSyncLatencyMs, buffered, syncErrorCount)
 			syncErrorCount = 0 // reset after reporting
 			_ = client.Post("/agent/sync/telemetry", t)
