@@ -239,7 +239,7 @@ func run() {
 	// Window polling at 1 second (matches ActivityWatch aw-watcher-window default).
 	windowTicker     := time.NewTicker(1 * time.Second)
 	screenshotTicker := time.NewTicker(time.Duration(cfg.ScreenshotInterval) * time.Second)
-	syncTicker       := time.NewTicker(time.Duration(cfg.SyncInterval) * time.Second)
+	syncTicker       := agentsync.NewJitteredTicker(time.Duration(cfg.SyncInterval) * time.Second)
 	inputTicker      := time.NewTicker(60 * time.Second)
 	metricsTicker    := time.NewTicker(60 * time.Second)
 	heartbeatTicker  := time.NewTicker(5 * time.Minute)
