@@ -31,8 +31,48 @@ func NewApp(binary []byte) *App {
 }
 
 // startup is called by Wails when the app starts.
+// If a token already exists (returning user), auto-launch the agent.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	go a.autoLaunchIfRegistered()
+}
+
+// autoLaunchIfRegistered starts the embedded agent if the device is already
+// registered and the agent is not currently running.
+func (a *App) autoLaunchIfRegistered() {
+	token, err := keychain.LoadToken()
+	if err != nil || token == "" {
+		return // not registered yet
+	}
+
+	cfg := config.Load()
+	if a.isAgentRunning(cfg.DataDir) {
+		return // already running
+	}
+
+	agentPath, err := a.extractAgent(cfg.DataDir)
+	if err != nil {
+		return
+	}
+
+	apiURL := cfg.APIURL
+	cmd := exec.Command(agentPath)
+	cmd.Env = append(os.Environ(),
+		"TC_API_URL="+apiURL,
+		"TC_AGENT_TOKEN="+token,
+	)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
+	}
+
+	logPath := filepath.Join(cfg.DataDir, "agent.log")
+	if logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600); err == nil {
+		cmd.Stdout = logFile
+		cmd.Stderr = logFile
+		defer logFile.Close()
+	}
+
+	_ = cmd.Start()
 }
 
 // CheckSetup returns true if the agent is already registered (token in OS keychain).
