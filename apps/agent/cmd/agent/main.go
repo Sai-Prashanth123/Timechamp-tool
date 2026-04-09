@@ -203,11 +203,12 @@ func run() {
 
 	// ── Tickers ────────────────────────────────────────────────────────────────
 	// Window polling at 1 second (matches ActivityWatch aw-watcher-window default).
-	windowTicker    := time.NewTicker(1 * time.Second)
+	windowTicker     := time.NewTicker(1 * time.Second)
 	screenshotTicker := time.NewTicker(time.Duration(cfg.ScreenshotInterval) * time.Second)
 	syncTicker       := time.NewTicker(time.Duration(cfg.SyncInterval) * time.Second)
 	inputTicker      := time.NewTicker(60 * time.Second)
 	metricsTicker    := time.NewTicker(60 * time.Second)
+	heartbeatTicker  := time.NewTicker(5 * time.Minute)
 	pruneTicker      := time.NewTicker(24 * time.Hour)
 
 	defer windowTicker.Stop()
@@ -215,6 +216,7 @@ func run() {
 	defer syncTicker.Stop()
 	defer inputTicker.Stop()
 	defer metricsTicker.Stop()
+	defer heartbeatTicker.Stop()
 	defer pruneTicker.Stop()
 
 	inputCounter := &capture.InputCounter{}
@@ -358,6 +360,14 @@ func run() {
 			} else if n1+n2+n3+n4 > 0 {
 				log.Printf("Synced: %d activity, %d keystrokes, %d screenshots, %d metrics",
 					n1, n2, n3, n4)
+			}
+
+		// ── Heartbeat ──────────────────────────────────────────────────────────
+		case <-heartbeatTicker.C:
+			if client.IsAvailable() {
+				if err := client.Heartbeat(); err != nil {
+					log.Printf("Heartbeat failed: %v", err)
+				}
 			}
 
 		// ── Daily prune ────────────────────────────────────────────────────────

@@ -9,7 +9,7 @@ interface Props {
 }
 
 export default function Setup({ onComplete }: Props) {
-  const [apiUrl, setApiUrl] = useState('https://api.timechamp.io/api/v1')
+  const [apiUrl, setApiUrl] = useState('http://localhost:3001/api/v1')
   const [token, setToken] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')

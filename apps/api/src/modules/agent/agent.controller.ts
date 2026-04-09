@@ -45,8 +45,9 @@ export class AgentController {
 
   @Get('screenshots/upload-url')
   @ApiOperation({ summary: 'Get a presigned S3 PUT URL for screenshot upload' })
-  getUploadUrl(@AgentCurrentUser() user: User) {
-    return this.service.generateUploadUrl(user);
+  async getUploadUrl(@AgentCurrentUser() user: User) {
+    const { uploadUrl, screenshotKey } = await this.service.generateUploadUrl(user);
+    return { data: { uploadUrl, s3Key: screenshotKey } };
   }
 
   @Post('screenshots')
@@ -75,11 +76,13 @@ export class AgentController {
   async getConfig(@AgentCurrentUser() user: User) {
     const org = await this.service.getOrgConfig(user.organizationId);
     return {
-      screenshotIntervalSec: org.screenshotIntervalSec,
-      streamingEnabled: org.streamingEnabled,
-      cameraEnabled: org.cameraEnabled,
-      audioEnabled: org.audioEnabled,
-      maxStreamFps: org.maxStreamFps,
+      data: {
+        screenshotIntervalSec: org.screenshotIntervalSec,
+        streamingEnabled: org.streamingEnabled,
+        cameraEnabled: org.cameraEnabled,
+        audioEnabled: org.audioEnabled,
+        maxStreamFps: org.maxStreamFps,
+      },
     };
   }
 

@@ -9,7 +9,7 @@ export class AgentRegistrationController {
   constructor(private readonly service: AgentService) {}
 
   @Post('register')
-  @HttpCode(HttpStatus.OK)
+  @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Register desktop agent device using an invite token' })
   async register(@Body() dto: RegisterAgentDto) {
     const { agentToken, employeeId, orgId } = await this.service.registerAgent(dto);

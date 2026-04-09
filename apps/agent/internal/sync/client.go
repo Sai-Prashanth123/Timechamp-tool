@@ -172,7 +172,7 @@ func (c *Client) PutPresigned(url string, data []byte, contentType string) error
 
 // GetPresignedUploadURL requests a presigned URL from the API for a screenshot upload.
 func (c *Client) GetPresignedUploadURL(filename string) (uploadURL, s3Key string, err error) {
-	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/agent/screenshots/presign", nil)
+	req, err := http.NewRequest(http.MethodGet, c.baseURL+"/agent/sync/screenshots/upload-url", nil)
 	if err != nil {
 		return "", "", err
 	}
@@ -199,6 +199,21 @@ func (c *Client) GetPresignedUploadURL(filename string) (uploadURL, s3Key string
 		return "", "", err
 	}
 	return result.Data.UploadURL, result.Data.S3Key, nil
+}
+
+// SaveScreenshotMeta notifies the API of a completed screenshot upload.
+func (c *Client) SaveScreenshotMeta(s3Key string, capturedAt time.Time, fileSizeBytes int64) error {
+	body := map[string]any{
+		"screenshotKey": s3Key,
+		"capturedAt":    capturedAt.UTC().Format(time.RFC3339),
+		"fileSizeBytes": fileSizeBytes,
+	}
+	return c.Post("/agent/sync/screenshots", body)
+}
+
+// Heartbeat pings the API to update last_seen_at for this device.
+func (c *Client) Heartbeat() error {
+	return c.Post("/agent/sync/heartbeat", struct{}{})
 }
 
 // OrgStreamConfig holds streaming configuration from the server.

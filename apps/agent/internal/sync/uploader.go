@@ -2,6 +2,7 @@ package sync
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -102,7 +103,7 @@ func (u *Uploader) FlushActivity() (int, error) {
 		ids = append(ids, e.ID)
 	}
 
-	if err := u.client.Post("/agent/activity", payload); err != nil {
+	if err := u.client.Post("/agent/sync/activity", payload); err != nil {
 		return 0, fmt.Errorf("upload activity: %w", err)
 	}
 
@@ -140,7 +141,7 @@ func (u *Uploader) FlushKeystrokes() (int, error) {
 		ids = append(ids, e.ID)
 	}
 
-	if err := u.client.Post("/agent/keystrokes", payload); err != nil {
+	if err := u.client.Post("/agent/sync/keystrokes", payload); err != nil {
 		return 0, err
 	}
 
@@ -204,6 +205,17 @@ func (u *Uploader) FlushScreenshots() (int, error) {
 		}
 
 		if err := uploadFileToS3(u.client, r.LocalPath, uploadURL); err != nil {
+			continue
+		}
+
+		// Get file size for metadata.
+		var fileSizeBytes int64
+		if fi, err := os.Stat(r.LocalPath); err == nil {
+			fileSizeBytes = fi.Size()
+		}
+
+		// Notify API of the completed upload.
+		if err := u.client.SaveScreenshotMeta(s3Key, r.CapturedAt, fileSizeBytes); err != nil {
 			continue
 		}
 
