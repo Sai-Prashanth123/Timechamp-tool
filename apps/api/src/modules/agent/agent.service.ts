@@ -1,4 +1,4 @@
-import { Injectable, ServiceUnavailableException, UnauthorizedException, Optional, Inject, Logger, forwardRef } from '@nestjs/common';
+import { Injectable, ServiceUnavailableException, UnauthorizedException, Logger, forwardRef, Inject, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -18,6 +18,7 @@ import { SyncScreenshotDto } from './dto/sync-screenshot.dto';
 import { SyncGpsDto } from './dto/sync-gps.dto';
 import { RegisterAgentDto } from './dto/register-agent.dto';
 import { MonitoringGateway } from '../monitoring/monitoring.gateway';
+import { TokenService } from '../../infrastructure/token/token.service';
 
 @Injectable()
 export class AgentService {
@@ -42,7 +43,7 @@ export class AgentService {
     private deviceRepo: Repository<AgentDevice>,
     @InjectRepository(AgentMetric)
     private metricsRepo: Repository<AgentMetric>,
-    @Optional() @Inject('TOKEN_SERVICE') private tokenService: any,
+    private tokenService: TokenService,
     @Optional() @Inject(forwardRef(() => MonitoringGateway))
     private monitoringGateway: MonitoringGateway | undefined,
   ) {
@@ -193,11 +194,8 @@ export class AgentService {
     employeeId: string;
     orgId: string;
   }> {
-    // Validate invite token
-    let userId: string | null = null;
-    if (this.tokenService) {
-      userId = await this.tokenService.peek('invite', dto.inviteToken);
-    }
+    // Validate and consume invite token (one-time use)
+    const userId = await this.tokenService.consume('invite', dto.inviteToken);
     if (!userId) {
       throw new UnauthorizedException('Invalid or expired invite token');
     }
