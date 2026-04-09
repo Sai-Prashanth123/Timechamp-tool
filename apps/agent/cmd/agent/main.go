@@ -244,6 +244,16 @@ func run() {
 		healthSrv.Stop(ctx)
 	}()
 
+	// Check permissions at startup and re-check every 60s (macOS only — no-op on other platforms).
+	capture.CheckAndRequestPermissions()
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			capture.CheckAndRequestPermissions()
+		}
+	}()
+
 	log.Printf("Agent started. Screenshot every %ds, sync every %ds, idle threshold %ds",
 		cfg.ScreenshotInterval, cfg.SyncInterval, cfg.IdleThreshold)
 
@@ -342,6 +352,10 @@ func run() {
 
 		// ── Screenshots ────────────────────────────────────────────────────────
 		case <-screenshotTicker.C:
+			// Skip if no screen recording permission (macOS) or user is idle.
+			if !capture.HasScreenRecording() {
+				continue
+			}
 			idleSec, _ := capture.IdleSeconds()
 			if time.Duration(idleSec)*time.Second >= afkThreshold {
 				continue
