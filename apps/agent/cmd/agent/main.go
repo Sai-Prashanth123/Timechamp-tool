@@ -426,8 +426,17 @@ func run() {
 	// background and must not be killed by terminal interrupts from the parent
 	// tray process or its console session. SIGTERM is the explicit stop signal.
 	signal.Ignore(os.Interrupt)
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGTERM)
+	go func() {
+		quit := make(chan os.Signal, 1)
+		signal.Notify(quit, syscall.SIGTERM)
+		<-quit
+		log.Printf("[agent] SIGTERM received — shutting down (8s deadline)")
+		cancelRun()
+		time.AfterFunc(8*time.Second, func() {
+			log.Printf("[agent] shutdown deadline exceeded — forcing exit")
+			os.Exit(0)
+		})
+	}()
 
 	// ── Rolling idle state (3-sample median + 2-sample AFK-exit hysteresis) ───
 	// idleSamples is a ring buffer written once per idleTicker tick (1s).
@@ -443,8 +452,8 @@ func run() {
 	for {
 		select {
 
-		case sig := <-quit:
-			log.Printf("Shutdown signal received (%v), flushing buffer...", sig)
+		case <-runCtx.Done():
+			log.Printf("[agent] context cancelled — flushing and exiting")
 			hq.FlushAll()
 			batcher.Flush() // drain any batched activity events before uploading
 			if n, err := uploader.FlushActivity(); err != nil {
