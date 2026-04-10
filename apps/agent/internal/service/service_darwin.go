@@ -37,17 +37,30 @@ const launchAgentPlistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
     <key>ThrottleInterval</key>
     <integer>10</integer>
 
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>AssociatedBundleIdentifiers</key>
+    <array>
+        <string>com.timechamp.installer</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>{{.Home}}</string>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
     <key>StandardOutPath</key>
     <string>{{.LogDir}}/agent.log</string>
 
     <key>StandardErrorPath</key>
     <string>{{.LogDir}}/agent_error.log</string>
 
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
-    </dict>
+    <key>ExitTimeout</key>
+    <integer>10</integer>
 </dict>
 </plist>
 `
@@ -104,7 +117,8 @@ func (m *darwinManager) Install(binaryPath string) error {
 		Label      string
 		BinaryPath string
 		LogDir     string
-	}{launchAgentLabel, absPath, ldir}
+		Home       string
+	}{launchAgentLabel, absPath, ldir, userHome()}
 
 	tmpl, err := template.New("plist").Parse(launchAgentPlistTemplate)
 	if err != nil {
@@ -121,10 +135,26 @@ func (m *darwinManager) Install(binaryPath string) error {
 	}
 	f.Close()
 
-	// Load immediately.
-	out, err := exec.Command("launchctl", "load", "-w", plistPath()).CombinedOutput()
+	uid := os.Getuid()
+	guiDomain := fmt.Sprintf("gui/%d", uid)
+
+	// Check if already loaded — kickstart to apply any binary change.
+	listOut, _ := exec.Command("launchctl", "list", launchAgentLabel).CombinedOutput()
+	if strings.Contains(string(listOut), launchAgentLabel) {
+		exec.Command("launchctl", "kickstart", "-k", //nolint:errcheck
+			fmt.Sprintf("%s/%s", guiDomain, launchAgentLabel)).Run()
+		return nil
+	}
+
+	// macOS 10.15+ bootstrap (modern API).
+	out, err := exec.Command("launchctl", "bootstrap", guiDomain, plistPath()).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("launchctl load: %w — %s", err, out)
+		// Fallback: deprecated load for macOS < 10.15.
+		out2, err2 := exec.Command("launchctl", "load", "-w", plistPath()).CombinedOutput()
+		if err2 != nil {
+			return fmt.Errorf("launchctl bootstrap: %w (%s); load fallback: %w (%s)",
+				err, out, err2, out2)
+		}
 	}
 
 	fmt.Printf("LaunchAgent installed at %s\n", plistPath())
@@ -138,9 +168,16 @@ func (m *darwinManager) Uninstall() error {
 		return fmt.Errorf("LaunchAgent plist not found: %s", path)
 	}
 
-	out, err := exec.Command("launchctl", "unload", "-w", path).CombinedOutput()
+	uid := os.Getuid()
+	guiDomain := fmt.Sprintf("gui/%d", uid)
+	out, err := exec.Command("launchctl", "bootout", guiDomain, path).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("launchctl unload: %w — %s", err, out)
+		// Fallback: deprecated unload for older macOS.
+		out2, err2 := exec.Command("launchctl", "unload", "-w", path).CombinedOutput()
+		if err2 != nil {
+			return fmt.Errorf("launchctl bootout: %w (%s); unload fallback: %w (%s)",
+				err, out, err2, out2)
+		}
 	}
 
 	return os.Remove(path)
@@ -148,9 +185,11 @@ func (m *darwinManager) Uninstall() error {
 
 // Start starts the LaunchAgent immediately via launchctl bootstrap / kickstart.
 func (m *darwinManager) Start() error {
-	out, err := exec.Command("launchctl", "start", launchAgentLabel).CombinedOutput()
+	uid := os.Getuid()
+	target := fmt.Sprintf("gui/%d/%s", uid, launchAgentLabel)
+	out, err := exec.Command("launchctl", "kickstart", "-k", target).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("launchctl start: %w — %s", err, out)
+		return fmt.Errorf("launchctl kickstart: %w — %s", err, out)
 	}
 	return nil
 }
