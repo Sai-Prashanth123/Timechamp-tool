@@ -159,15 +159,3 @@ func toolhelpProcessName(pid uint32) string {
 	}
 	return ""
 }
-
-func uint32ToStr(n uint32) string {
-	if n == 0 {
-		return "0"
-	}
-	buf := make([]byte, 0, 10)
-	for n > 0 {
-		buf = append([]byte{byte('0' + n%10)}, buf...)
-		n /= 10
-	}
-	return string(buf)
-}
