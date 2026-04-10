@@ -10,8 +10,17 @@ import (
 	"io"
 	"log"
 	"net/http"
+	stdsync "sync"
 	"strings"
 	"time"
+)
+
+type circuitState int
+
+const (
+	stateClosed   circuitState = 0
+	stateOpen     circuitState = 1
+	stateHalfOpen circuitState = 2
 )
 
 const (
@@ -20,14 +29,19 @@ const (
 )
 
 // Client is an HTTP client for the TimeChamp API.
-// It includes a simple circuit breaker and optional TLS certificate pinning.
+// It includes a thread-safe circuit breaker with half-open state and optional TLS certificate pinning.
 type Client struct {
 	baseURL     string
 	token       string
 	http        *http.Client
-	failures    int
-	openedAt    time.Time
-	circuitOpen bool
+	retryConfig RetryConfig // defaults to DefaultRetry; overridable in tests
+
+	mu           stdsync.Mutex
+	state        circuitState  // guarded by mu
+	failures     int           // guarded by mu
+	openedAt     time.Time     // guarded by mu
+	resetTimeout time.Duration // guarded by mu; doubles on half-open probe failure
+
 	// pinnedCertSHA256 is the hex-encoded SHA-256 of the expected server certificate DER.
 	// Empty string disables pinning.
 	pinnedCertSHA256 string
@@ -46,8 +60,9 @@ func WithCertPin(sha256Hex string) ClientOption {
 // NewClient creates a new API client.
 func NewClient(baseURL, token string, opts ...ClientOption) *Client {
 	c := &Client{
-		baseURL: baseURL,
-		token:   token,
+		baseURL:     baseURL,
+		token:       token,
+		retryConfig: DefaultRetry,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -82,24 +97,40 @@ func NewClient(baseURL, token string, opts ...ClientOption) *Client {
 	return c
 }
 
-// IsAvailable returns true if the circuit is closed (API reachable).
+// isBlocked returns true if the circuit is definitively open (not half-open).
+// Used for mid-retry checks where we must not consume a half-open probe slot.
+func (c *Client) isBlocked() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.state != stateOpen {
+		return false
+	}
+	return time.Since(c.openedAt) < c.resetTimeout
+}
+
+// IsAvailable returns true if the circuit is closed or transitioning to half-open (API reachable).
 func (c *Client) IsAvailable() bool {
-	if !c.circuitOpen {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	switch c.state {
+	case stateClosed:
 		return true
+	case stateOpen:
+		if time.Since(c.openedAt) >= c.resetTimeout {
+			c.state = stateHalfOpen
+			return true // allow probe
+		}
+		return false
+	case stateHalfOpen:
+		return true // probe in progress; allow it to complete
 	}
-	if time.Since(c.openedAt) > circuitResetAfter {
-		c.circuitOpen = false
-		c.failures = 0
-		return true
-	}
-	return false
+	return true
 }
 
 // Post sends a POST request with a JSON body using full-jitter exponential backoff.
 func (c *Client) Post(path string, body any) error {
 	if !c.IsAvailable() {
-		return fmt.Errorf("circuit open: API unavailable, retry after %s",
-			c.openedAt.Add(circuitResetAfter).Format(time.RFC3339))
+		return fmt.Errorf("circuit open: API unavailable")
 	}
 
 	data, err := json.Marshal(body)
@@ -107,9 +138,10 @@ func (c *Client) Post(path string, body any) error {
 		return fmt.Errorf("marshal body: %w", err)
 	}
 
-	return WithRetry(DefaultRetry, func() (permanent bool, err error) {
-		// Re-check circuit breaker on each attempt — may have tripped during retries.
-		if !c.IsAvailable() {
+	return WithRetry(c.retryConfig, func() (permanent bool, err error) {
+		// Re-check circuit breaker on each retry attempt (not first) — may have tripped during retries.
+		// Use isBlocked() so we do not consume a half-open slot that was already granted above.
+		if c.isBlocked() {
 			return true, fmt.Errorf("circuit open: giving up after breaker tripped")
 		}
 
@@ -124,7 +156,7 @@ func (c *Client) Post(path string, body any) error {
 		resp, err := c.http.Do(req)
 		if err != nil {
 			c.recordFailure()
-			log.Printf("[sync] POST %s failed (failures=%d): %v", path, c.failures, err)
+			log.Printf("[sync] POST %s failed: %v", path, err)
 			return false, fmt.Errorf("request failed: %w", err)
 		}
 		_, _ = io.Copy(io.Discard, resp.Body) // drain body to allow connection reuse
@@ -136,12 +168,11 @@ func (c *Client) Post(path string, body any) error {
 		}
 		if resp.StatusCode >= 400 {
 			c.recordFailure()
-			log.Printf("[sync] POST %s HTTP %d (failures=%d)", path, resp.StatusCode, c.failures)
+			log.Printf("[sync] POST %s HTTP %d", path, resp.StatusCode)
 			return false, fmt.Errorf("HTTP %d for %s", resp.StatusCode, path)
 		}
 		// Success
-		c.failures = 0
-		c.circuitOpen = false
+		c.recordSuccess()
 		return false, nil
 	})
 }
@@ -279,19 +310,45 @@ func (c *Client) FetchOrgConfig() (*OrgStreamConfig, error) {
 }
 
 func (c *Client) recordFailure() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.failures++
-	if c.failures >= circuitOpenThreshold {
-		c.circuitOpen = true
+	if c.state == stateHalfOpen {
+		// probe failed — double the timeout (cap at 1 hour)
+		c.resetTimeout *= 2
+		if c.resetTimeout > time.Hour {
+			c.resetTimeout = time.Hour
+		}
+		c.state = stateOpen
 		c.openedAt = time.Now()
+		return
 	}
+	if c.failures >= circuitOpenThreshold {
+		c.state = stateOpen
+		c.openedAt = time.Now()
+		if c.resetTimeout == 0 {
+			c.resetTimeout = circuitResetAfter
+		}
+	}
+}
+
+func (c *Client) recordSuccess() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.state = stateClosed
+	c.failures = 0
+	c.resetTimeout = circuitResetAfter // reset backoff
 }
 
 // ResetCircuit clears an open circuit breaker so syncs can resume immediately
 // after a system resume event. Pre-sleep failures are stale and should not
 // block the first post-wake sync.
 func (c *Client) ResetCircuit() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.state = stateClosed
 	c.failures = 0
-	c.circuitOpen = false
+	c.resetTimeout = circuitResetAfter
 }
 
 // agentVersion is embedded at build time via -ldflags "-X ...agentVersion=x.y.z".
