@@ -13,9 +13,9 @@ func TestWaitForHealth_SucceedsImmediately(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	old := healthURL
-	healthURL = srv.URL
-	defer func() { healthURL = old }()
+	old := getHealthURL
+	getHealthURL = func() string { return srv.URL }
+	defer func() { getHealthURL = old }()
 
 	if err := waitForHealth(2 * time.Second); err != nil {
 		t.Fatalf("expected success, got %v", err)
@@ -34,9 +34,9 @@ func TestWaitForHealth_RetriesUntilReady(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	old := healthURL
-	healthURL = srv.URL
-	defer func() { healthURL = old }()
+	old := getHealthURL
+	getHealthURL = func() string { return srv.URL }
+	defer func() { getHealthURL = old }()
 
 	if err := waitForHealth(5 * time.Second); err != nil {
 		t.Fatalf("expected eventual success, got %v", err)
@@ -52,9 +52,9 @@ func TestWaitForHealth_TimesOut(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	old := healthURL
-	healthURL = srv.URL
-	defer func() { healthURL = old }()
+	old := getHealthURL
+	getHealthURL = func() string { return srv.URL }
+	defer func() { getHealthURL = old }()
 
 	if err := waitForHealth(1200 * time.Millisecond); err == nil {
 		t.Fatal("expected timeout error, got nil")

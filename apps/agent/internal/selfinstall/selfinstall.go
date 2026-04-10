@@ -39,8 +39,11 @@ type Result struct {
 	Warnings []string
 }
 
-// healthURL is the agent health endpoint. Overridden in tests.
-var healthURL = "http://127.0.0.1:27183/health"
+// getHealthURL returns the agent health endpoint URL.
+// Replaced in tests to point at a mock server.
+// WARNING: not safe to replace concurrently; do not use t.Parallel() in tests
+// that override this variable.
+var getHealthURL = func() string { return "http://127.0.0.1:27183/health" }
 
 // Install registers the agent for permanent background operation on the
 // current OS. It is idempotent: safe to call multiple times.
@@ -68,7 +71,7 @@ func Install(cfg Config, progress chan<- string) (Result, error) {
 
 	sendProgress(progress, "Verifying agent health…")
 	if err := waitForHealth(15 * time.Second); err != nil {
-		return Result{}, fmt.Errorf("health check: %w — check logs in the agent data directory for details")
+		return Result{}, fmt.Errorf("health check: %w — check logs in the agent data directory for details", err)
 	}
 
 	return Result{
@@ -84,7 +87,7 @@ func waitForHealth(timeout time.Duration) error {
 	client := &http.Client{Timeout: 3 * time.Second}
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		resp, err := client.Get(healthURL)
+		resp, err := client.Get(getHealthURL())
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
