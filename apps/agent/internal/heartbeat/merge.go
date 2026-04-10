@@ -152,6 +152,11 @@ func NewQueue(commitInterval time.Duration, onCommit CommitHandler) *Queue {
 	}
 }
 
+// maxEventDuration caps the duration a single cached event can accumulate
+// before it is force-committed. Guards against memory growth on very long
+// sessions or if commitInterval is misconfigured to a large value.
+const maxEventDuration = time.Hour
+
 // Push feeds a new heartbeat into the queue for the given stream.
 // pulsetime is the merge window (typically poll_interval + 1 s).
 func (q *Queue) Push(stream string, event Event, pulsetime time.Duration) {
@@ -169,6 +174,11 @@ func (q *Queue) Push(stream string, event Event, pulsetime time.Duration) {
 	if merged != nil {
 		// Successfully merged — check commit threshold.
 		if merged.Duration >= q.commitInterval {
+			q.onCommit(*merged)
+			e := event
+			q.lastHeartbeat[stream] = &e
+		} else if merged.Duration >= maxEventDuration {
+			// Hour cap: commit before the cached event grows unboundedly.
 			q.onCommit(*merged)
 			e := event
 			q.lastHeartbeat[stream] = &e
