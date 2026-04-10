@@ -1,6 +1,10 @@
 // Package main is the TimeChamp Agent setup wizard.
 // Opens a local browser page — no terminal, no dialogs, works on Windows/macOS/Linux.
 // The agent binary is embedded at compile time; CI replaces agent_bin before building.
+//
+// Windows UAC re-exec: when selfinstall needs admin to install a Windows Service,
+// it re-launches this binary with --install-service <handoff-path>. The elevated
+// process reads the handoff, installs the service, and exits immediately.
 package main
 
 import (
@@ -11,12 +15,13 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/timechamp/agent/internal/config"
 	"github.com/timechamp/agent/internal/keychain"
+	"github.com/timechamp/agent/internal/selfinstall"
 	agentsync "github.com/timechamp/agent/internal/sync"
 )
 
@@ -27,15 +32,19 @@ var indexHTML []byte
 var agentBinary []byte
 
 func main() {
+	// Windows UAC re-exec: install service from elevated process and exit.
+	if len(os.Args) == 3 && os.Args[1] == "--install-service" {
+		handleInstallService(os.Args[2])
+		return
+	}
+
 	cfg := config.Load()
 
-	// Bind on a random free port (keep listener open)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		os.Exit(1)
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
-
 	done := make(chan struct{}, 1)
 
 	mux := http.NewServeMux()
@@ -58,64 +67,127 @@ func main() {
 			jsonErr(w, "Cannot reach the API server. Check the URL and ensure it is running.", http.StatusServiceUnavailable)
 			return
 		}
+		resp.Body.Close()
 		jsonOK(w, "ok")
 	})
 
-	// ── Register: authenticate + save credentials + launch agent ────────────
-	mux.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	// ── Register stream: SSE endpoint ────────────────────────────────────────
+	mux.HandleFunc("/register-stream", func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 			return
 		}
 
-		var body struct {
-			APIURL string `json:"apiUrl"`
-			Token  string `json:"token"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			jsonErr(w, "Invalid request body.", http.StatusBadRequest)
-			return
-		}
-		if body.Token == "" {
-			jsonErr(w, "Invite token is required.", http.StatusBadRequest)
-			return
-		}
-		apiURL := body.APIURL
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+
+		apiURL := r.URL.Query().Get("apiUrl")
 		if apiURL == "" {
 			apiURL = cfg.APIURL
 		}
+		token := r.URL.Query().Get("token")
 
-		// Register device with API
+		send := func(step, msg string) {
+			data, _ := json.Marshal(map[string]string{"step": step, "msg": msg})
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		}
+		sendErr := func(step, errMsg string) {
+			data, _ := json.Marshal(map[string]string{"step": step, "error": errMsg})
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		}
+
+		// ── Step: connect ────────────────────────────────────────────────────
+		send("connect", "Checking connection…")
+		client := &http.Client{Timeout: 8 * time.Second}
+		resp, pingErr := client.Get(apiURL + "/health")
+		if pingErr != nil {
+			sendErr("connect", fmt.Sprintf(
+				"Cannot reach %s. Check the URL is correct and the server is running.", apiURL))
+			return
+		}
+		resp.Body.Close()
+		if resp.StatusCode >= 500 {
+			sendErr("connect", fmt.Sprintf(
+				"API server at %s returned status %d. Try again in a moment.", apiURL, resp.StatusCode))
+			return
+		}
+
+		// ── Step: register ───────────────────────────────────────────────────
+		send("register", "Registering device…")
 		hostname, _ := os.Hostname()
 		agentToken, employeeID, orgID, regErr := agentsync.Register(
-			apiURL, body.Token, hostname, runtime.GOOS, runtime.GOARCH,
+			apiURL, token, hostname, runtime.GOOS, runtime.GOARCH,
 		)
 		if regErr != nil {
-			jsonErr(w, "Registration failed: "+regErr.Error(), http.StatusBadRequest)
+			sendErr("register",
+				"Invite token is invalid or already used. Generate a new one in the dashboard.")
 			return
 		}
 
-		// Persist credentials
+		// ── Step: creds ──────────────────────────────────────────────────────
+		send("creds", "Saving credentials…")
 		if err := keychain.SaveToken(agentToken); err != nil {
-			jsonErr(w, "Could not save token to keychain: "+err.Error(), http.StatusInternalServerError)
+			sendErr("creds",
+				"Cannot save credentials to keychain. Check System Preferences → Privacy → Keychain.")
 			return
 		}
-		if err := config.SaveIdentity(cfg.DataDir, orgID, employeeID); err != nil {
-			jsonErr(w, "Could not save identity: "+err.Error(), http.StatusInternalServerError)
+		if err := config.SaveIdentity(cfg.DataDir, orgID, employeeID, apiURL); err != nil {
+			sendErr("creds",
+				"Could not save identity. Check disk space and permissions in the data directory.")
 			return
 		}
 
-		// Extract embedded agent binary and launch it
-		agentPath, extractErr := extractAgent(cfg.DataDir)
-		if extractErr == nil {
-			cmd := exec.Command(agentPath)
-			cmd.Env = append(os.Environ(), "TC_API_URL="+apiURL)
-			_ = cmd.Start()
+		// ── Step: install ────────────────────────────────────────────────────
+		send("install", "Installing agent…")
+		progressCh := make(chan string, 16)
+		go func() {
+			for msg := range progressCh {
+				send("install", msg)
+			}
+		}()
+
+		result, installErr := selfinstall.Install(selfinstall.Config{
+			BinaryData: agentBinary,
+			APIURL:     apiURL,
+			DataDir:    cfg.DataDir,
+		}, progressCh)
+		close(progressCh)
+
+		if installErr != nil {
+			msg := installErr.Error()
+			switch {
+			case containsAny(msg, "quarantine", "xattr"):
+				sendErr("install",
+					"Could not remove macOS security flag. Right-click the app and choose Open, then try again.")
+			case containsAny(msg, "MDM_BLOCKED", "MDM-125"):
+				sendErr("install",
+					"Your organisation's IT policy is blocking background agents. Contact your IT admin and share error code: MDM-125.")
+			case containsAny(msg, "registry Run key"):
+				sendErr("install",
+					"Could not configure auto-start. Run the setup as Administrator or contact IT.")
+			case containsAny(msg, "health check"):
+				sendErr("verify",
+					"Agent did not start within 15 seconds. Check agent_error.log in the data directory for details.")
+			default:
+				sendErr("install", "Installation failed: "+msg)
+			}
+			return
 		}
 
-		jsonOK(w, "registered")
+		// Emit non-fatal warnings (e.g. MDM fallback notice).
+		for _, w := range result.Warnings {
+			send("install", "⚠ "+w)
+		}
 
-		// Shut down the HTTP server after the response is sent
+		// ── Step: done ───────────────────────────────────────────────────────
+		send("done", fmt.Sprintf(
+			"Agent is running! Auto-start mode: %s. This window will close in 4 seconds.",
+			result.AutoStartMode))
+
 		go func() {
 			time.Sleep(200 * time.Millisecond)
 			done <- struct{}{}
@@ -125,16 +197,12 @@ func main() {
 	srv := &http.Server{Handler: mux}
 	go func() { _ = srv.Serve(ln) }()
 
-	// Open browser
-	url := fmt.Sprintf("http://127.0.0.1:%d", port)
-	openBrowser(url)
-
-	// Block until registration completes
+	openBrowser(fmt.Sprintf("http://127.0.0.1:%d", port))
 	<-done
 	_ = srv.Close()
 }
 
-// ── Helpers ─────────────────────────────────────────────────────────────────
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
 func jsonOK(w http.ResponseWriter, status string) {
 	w.Header().Set("Content-Type", "application/json")
@@ -160,18 +228,11 @@ func openBrowser(url string) {
 	_ = cmd.Start()
 }
 
-// extractAgent writes the embedded agent binary to dataDir and returns the path.
-func extractAgent(dataDir string) (string, error) {
-	if err := os.MkdirAll(dataDir, 0700); err != nil {
-		return "", err
+func containsAny(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
+		}
 	}
-	name := "timechamp-agent"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
-	}
-	dest := filepath.Join(dataDir, name)
-	if err := os.WriteFile(dest, agentBinary, 0755); err != nil {
-		return "", err
-	}
-	return dest, nil
+	return false
 }
