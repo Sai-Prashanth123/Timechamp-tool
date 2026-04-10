@@ -63,11 +63,15 @@ func main() {
 		}
 		client := &http.Client{Timeout: 8 * time.Second}
 		resp, err := client.Get(apiURL + "/health")
-		if err != nil || resp.StatusCode >= 500 {
+		if err != nil {
 			jsonErr(w, "Cannot reach the API server. Check the URL and ensure it is running.", http.StatusServiceUnavailable)
 			return
 		}
-		resp.Body.Close()
+		defer resp.Body.Close()
+		if resp.StatusCode >= 500 {
+			jsonErr(w, "Cannot reach the API server. Check the URL and ensure it is running.", http.StatusServiceUnavailable)
+			return
+		}
 		jsonOK(w, "ok")
 	})
 
@@ -109,7 +113,7 @@ func main() {
 				"Cannot reach %s. Check the URL is correct and the server is running.", apiURL))
 			return
 		}
-		resp.Body.Close()
+		resp.Body.Close() // always close; defer is not used in SSE handlers (long-lived goroutine)
 		if resp.StatusCode >= 500 {
 			sendErr("connect", fmt.Sprintf(
 				"API server at %s returned status %d. Try again in a moment.", apiURL, resp.StatusCode))
