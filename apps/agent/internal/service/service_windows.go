@@ -18,7 +18,16 @@ const (
 	serviceName        = "TimeChampAgent"
 	serviceDisplayName = "Time Champ Agent"
 	serviceDescription = "Time Champ productivity monitoring agent"
+
+	pbtApmSuspend         uint32 = 0x0004 // PBT_APMSUSPEND
+	pbtApmResumeAutomatic uint32 = 0x0012 // PBT_APMRESUMEAUTOMATIC
 )
+
+// PowerEvents receives "suspend" and "resume" strings from the Windows SCM
+// power event callback. Buffer 4 to avoid blocking the service handler.
+// main.go reads this channel and forwards events to sleepwatch.Signal().
+// Only populated when running as a Windows Service (not when tray-launched).
+var PowerEvents = make(chan string, 4)
 
 type windowsManager struct{}
 
@@ -169,7 +178,7 @@ type agentSvc struct {
 }
 
 func (a *agentSvc) Execute(args []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
-	const cmdsAccepted = svc.AcceptStop | svc.AcceptShutdown
+	const cmdsAccepted = svc.AcceptStop | svc.AcceptShutdown | svc.AcceptPowerEvent
 
 	changes <- svc.Status{State: svc.StartPending}
 
@@ -193,6 +202,19 @@ func (a *agentSvc) Execute(args []string, r <-chan svc.ChangeRequest, changes ch
 				case <-time.After(10 * time.Second):
 				}
 				return false, 0
+			case svc.PowerEvent:
+				switch c.EventType {
+				case pbtApmResumeAutomatic:
+					select {
+					case PowerEvents <- "resume":
+					default:
+					}
+				case pbtApmSuspend:
+					select {
+					case PowerEvents <- "suspend":
+					default:
+					}
+				}
 			}
 		case <-done:
 			changes <- svc.Status{State: svc.StopPending}
