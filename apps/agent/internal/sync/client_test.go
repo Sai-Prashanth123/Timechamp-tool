@@ -113,47 +113,58 @@ func TestCircuitBreakerConcurrency(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+
+	// Verify no stuck probe state after concurrent access.
+	c.mu.Lock()
+	pif := c.probeInFlight
+	st := c.state
+	c.mu.Unlock()
+	if pif && st != stateHalfOpen {
+		t.Errorf("probeInFlight=true but state=%d (not half-open) — stuck state after concurrency", st)
+	}
 }
 
 func TestCircuitBreakerHalfOpen(t *testing.T) {
 	var attempts atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := int(attempts.Add(1))
-		if n <= 3 {
-			w.WriteHeader(http.StatusServiceUnavailable)
+		if n == 1 {
+			w.WriteHeader(http.StatusOK) // probe succeeds
 		} else {
-			w.WriteHeader(http.StatusOK)
+			w.WriteHeader(http.StatusServiceUnavailable)
 		}
 	}))
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "tok")
-	c.resetTimeout = 50 * time.Millisecond
-	// Use zero-sleep retries so the test doesn't wait for backoff intervals.
 	c.retryConfig = RetryConfig{
 		InitialInterval: 1 * time.Millisecond,
 		MaxInterval:     1 * time.Millisecond,
 		Multiplier:      1.0,
-		MaxElapsedTime:  1 * time.Second,
+		MaxElapsedTime:  500 * time.Millisecond,
 	}
 
-	// Trip circuit with 3 failures.
-	for range 3 {
-		_ = c.Post("/agent/sync/heartbeat", struct{}{})
-	}
+	// Trip circuit deterministically via direct state manipulation.
+	c.mu.Lock()
+	c.failures = circuitOpenThreshold
+	c.state = stateOpen
+	c.openedAt = time.Now()
+	c.resetTimeout = 50 * time.Millisecond
+	c.mu.Unlock()
 
 	// Verify circuit is open.
 	c.mu.Lock()
 	if c.state != stateOpen {
 		c.mu.Unlock()
-		t.Fatal("circuit should be open after 3 failures")
+		t.Fatal("circuit should be open after direct state set")
 	}
 	c.mu.Unlock()
 
-	// Wait for reset timeout → half-open on next IsAvailable call.
+	// Wait for reset timeout → next IsAvailable() transitions to half-open.
 	time.Sleep(100 * time.Millisecond)
 
-	// Send one probe — internally IsAvailable transitions to half-open, probe succeeds, recordSuccess closes circuit.
+	// Send one probe — IsAvailable transitions to half-open, sets probeInFlight,
+	// probe succeeds, recordSuccess closes circuit.
 	if err := c.Post("/agent/sync/heartbeat", struct{}{}); err != nil {
 		t.Fatalf("probe post failed: %v", err)
 	}

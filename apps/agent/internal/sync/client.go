@@ -61,9 +61,10 @@ func WithCertPin(sha256Hex string) ClientOption {
 // NewClient creates a new API client.
 func NewClient(baseURL, token string, opts ...ClientOption) *Client {
 	c := &Client{
-		baseURL:     baseURL,
-		token:       token,
-		retryConfig: DefaultRetry,
+		baseURL:      baseURL,
+		token:        token,
+		retryConfig:  DefaultRetry,
+		resetTimeout: circuitResetAfter,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -168,6 +169,13 @@ func (c *Client) Post(path string, body any) error {
 		resp.Body.Close()
 
 		if isPermanentHTTPStatus(resp.StatusCode) {
+			// Release probe slot if in half-open — permanent errors (auth, not-found)
+			// are not server availability signals; don't re-open the circuit.
+			c.mu.Lock()
+			if c.state == stateHalfOpen {
+				c.probeInFlight = false
+			}
+			c.mu.Unlock()
 			log.Printf("[sync] POST %s permanent error HTTP %d", path, resp.StatusCode)
 			return true, fmt.Errorf("permanent HTTP %d for %s", resp.StatusCode, path)
 		}
@@ -195,7 +203,7 @@ func (c *Client) PutPresigned(url string, data []byte, contentType string) error
 		return fmt.Errorf("S3 upload failed: %w", err)
 	}
 	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
+	_, _ = io.Copy(io.Discard, resp.Body)
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("S3 upload status: %d", resp.StatusCode)
@@ -204,6 +212,8 @@ func (c *Client) PutPresigned(url string, data []byte, contentType string) error
 }
 
 // GetPresignedUploadURL requests a presigned URL from the API for a screenshot upload.
+// Note: intentionally bypasses the circuit breaker — not on the hot-path and
+// called infrequently (once per screenshot capture cycle).
 func (c *Client) GetPresignedUploadURL(filename string) (uploadURL, s3Key string, err error) {
 	req, err := http.NewRequest(http.MethodGet, c.baseURL+"/agent/sync/screenshots/upload-url", nil)
 	if err != nil {
@@ -291,6 +301,8 @@ type OrgStreamConfig struct {
 }
 
 // FetchOrgConfig fetches organization config including streaming settings.
+// Note: intentionally bypasses the circuit breaker — called on a slow polling
+// interval and not on the hot-path.
 func (c *Client) FetchOrgConfig() (*OrgStreamConfig, error) {
 	req, err := http.NewRequest(http.MethodGet, c.baseURL+"/agent/sync/config", nil)
 	if err != nil {
@@ -332,9 +344,6 @@ func (c *Client) recordFailure() {
 	if c.failures >= circuitOpenThreshold {
 		c.state = stateOpen
 		c.openedAt = time.Now()
-		if c.resetTimeout == 0 {
-			c.resetTimeout = circuitResetAfter
-		}
 	}
 }
 
@@ -344,7 +353,7 @@ func (c *Client) recordSuccess() {
 	c.probeInFlight = false
 	c.state = stateClosed
 	c.failures = 0
-	c.resetTimeout = circuitResetAfter // reset backoff
+	c.resetTimeout = circuitResetAfter // reset exponential backoff on recovery
 }
 
 // ResetCircuit clears an open circuit breaker so syncs can resume immediately
