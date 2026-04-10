@@ -3,10 +3,9 @@
 package capture
 
 import (
-	"context"
-	"os/exec"
+	"fmt"
 	"path/filepath"
-	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -17,7 +16,36 @@ import (
 // processQueryLimitedInfo works even for elevated / protected processes on Vista+.
 const processQueryLimitedInfo = 0x1000
 
+var lastKnownWindow atomic.Pointer[ActiveWindow]
+
+// getActiveWindow calls getActiveWindowImpl() with an 800ms timeout.
+// If the call hangs (e.g. frozen compositor), returns the last known window
+// so the event loop continues accumulating time on the previous app.
 func getActiveWindow() (ActiveWindow, error) {
+	type result struct {
+		w   ActiveWindow
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		w, err := getActiveWindowImpl()
+		ch <- result{w, err}
+	}()
+	select {
+	case r := <-ch:
+		if r.err == nil {
+			lastKnownWindow.Store(&r.w)
+		}
+		return r.w, r.err
+	case <-time.After(800 * time.Millisecond):
+		if p := lastKnownWindow.Load(); p != nil {
+			return *p, nil // return last known — duration keeps accumulating
+		}
+		return ActiveWindow{}, fmt.Errorf("GetActiveWindow timeout")
+	}
+}
+
+func getActiveWindowImpl() (ActiveWindow, error) {
 	hwnd, _, _ := getForegroundWindow.Call()
 	if hwnd == 0 {
 		return ActiveWindow{AppName: "Desktop", WindowTitle: ""}, nil
@@ -49,7 +77,7 @@ func getActiveWindow() (ActiveWindow, error) {
 // Strategy:
 //  1. QueryFullProcessImageNameW (Vista+, works for most processes)
 //  2. GetModuleFileNameEx via psapi (legacy fallback)
-//  3. WMIC query (fallback for elevated / SYSTEM processes)
+//  3. CreateToolhelp32Snapshot (pure Win32, no WMI dependency)
 func processName(pid uint32) string {
 	if name := queryProcessImageName(pid); name != "" {
 		return name
@@ -57,7 +85,7 @@ func processName(pid uint32) string {
 	if name := moduleFileNameEx(pid); name != "" {
 		return name
 	}
-	return wmicProcessName(pid)
+	return toolhelpProcessName(pid)
 }
 
 // queryProcessImageName uses QueryFullProcessImageNameW — the most reliable
@@ -108,26 +136,25 @@ func moduleFileNameEx(pid uint32) string {
 	return filepath.Base(fullPath)
 }
 
-// wmicProcessName falls back to `wmic process` for elevated/SYSTEM processes.
-// A 3-second timeout prevents the main loop from hanging if wmic stalls
-// (e.g. WMI service restart or corrupt WMI repository).
-func wmicProcessName(pid uint32) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "wmic", "process", "where",
-		"ProcessId="+uint32ToStr(pid), "get", "Name", "/format:value",
-	)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	out, err := cmd.Output()
+// toolhelpProcessName uses CreateToolhelp32Snapshot to find a process name by
+// PID. Pure Win32 — no subprocess, no WMI dependency, returns in <1ms.
+func toolhelpProcessName(pid uint32) string {
+	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
 	if err != nil {
 		return ""
 	}
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if after, ok := strings.CutPrefix(line, "Name="); ok {
-			if name := strings.TrimSpace(after); name != "" {
-				return name
-			}
+	defer windows.CloseHandle(snap)
+	var entry windows.ProcessEntry32
+	entry.Size = uint32(unsafe.Sizeof(entry))
+	if err := windows.Process32First(snap, &entry); err != nil {
+		return ""
+	}
+	for {
+		if entry.ProcessID == pid {
+			return windows.UTF16ToString(entry.ExeFile[:])
+		}
+		if err := windows.Process32Next(snap, &entry); err != nil {
+			break
 		}
 	}
 	return ""
