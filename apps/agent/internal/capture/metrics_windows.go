@@ -123,8 +123,8 @@ func (c *metricsCollector) collect() (SystemMetrics, error) {
 	c.lastTotal = totalActive
 
 	// ---- Agent process memory ----
-	proc2, err := windows.GetCurrentProcess()
-	if err == nil {
+	proc2 := windows.CurrentProcess()
+	{
 		var pmc processMemoryCounters
 		pmc.cb = uint32(unsafe.Sizeof(pmc))
 		getProcessMemoryInfo.Call(uintptr(proc2), uintptr(unsafe.Pointer(&pmc)), uintptr(pmc.cb))
