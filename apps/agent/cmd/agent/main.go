@@ -398,6 +398,17 @@ func run() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGTERM)
 
+	// ── Rolling idle state (3-sample median + 2-sample AFK-exit hysteresis) ───
+	// idleSamples is a ring buffer written once per idleTicker tick (1s).
+	// medianUint32 filters single-sample spikes before the threshold comparison.
+	// activeConfirmCount requires 2 consecutive below-threshold readings to exit
+	// AFK so that a momentary input glitch does not prematurely end an AFK period.
+	var (
+		idleSamples        [3]uint32
+		idleSampleIdx      int
+		activeConfirmCount int
+	)
+
 	for {
 		select {
 
@@ -455,15 +466,31 @@ func run() {
 		// ── Idle / AFK tick (1 second) ─────────────────────────────────────────────
 		case <-idleTicker.C:
 			withRecover("idle-tick", crashReporter, func() {
-				idleSec, _ := capture.IdleSeconds()
-				idleDur := time.Duration(idleSec) * time.Second
-				if !isAFK && idleDur >= afkThreshold {
-					hq.FlushAll()
-					isAFK = true
-					log.Printf("[afk] user idle for %s — pausing tracking", idleDur.Round(time.Second))
-				} else if isAFK && idleDur < afkThreshold {
+				rawIdle, _ := capture.IdleSeconds()
+				idleSamples[idleSampleIdx%3] = uint32(rawIdle)
+				idleSampleIdx++
+				idleSec := medianUint32(idleSamples)
+
+				// Hysteresis: require 2 consecutive below-threshold readings to exit AFK
+				// so a momentary input glitch does not prematurely end an AFK period.
+				if idleSec < uint32(cfg.IdleThreshold) {
+					activeConfirmCount++
+				} else {
+					activeConfirmCount = 0
+				}
+				prevAFK := isAFK
+				if isAFK && activeConfirmCount >= 2 {
 					isAFK = false
-					log.Printf("[afk] user returned after %s idle", idleDur.Round(time.Second))
+				} else if !isAFK && idleSec >= uint32(cfg.IdleThreshold) {
+					isAFK = true
+				}
+				if prevAFK != isAFK {
+					if isAFK {
+						hq.FlushAll()
+						log.Printf("[afk] user idle for %ds — pausing tracking", idleSec)
+					} else {
+						log.Printf("[afk] user returned after %ds idle", idleSec)
+					}
 				}
 			})
 
