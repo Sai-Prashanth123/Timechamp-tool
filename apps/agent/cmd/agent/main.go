@@ -25,6 +25,7 @@ import (
 	"github.com/timechamp/agent/internal/heartbeat"
 	"github.com/timechamp/agent/internal/keychain"
 	"github.com/timechamp/agent/internal/service"
+	"github.com/timechamp/agent/internal/sleepwatch"
 	"github.com/timechamp/agent/internal/stream"
 	agentsync "github.com/timechamp/agent/internal/sync"
 	"github.com/timechamp/agent/internal/telemetry"
@@ -82,6 +83,10 @@ func run() {
 	}
 	cfg.OrgID = identity.OrgID
 	cfg.EmployeeID = identity.EmployeeID
+	// If APIURL was not set via env var, fall back to the persisted value.
+	if os.Getenv("TC_API_URL") == "" && identity.APIURL != "" {
+		cfg.APIURL = identity.APIURL
+	}
 
 	// Auth token — check env first (passed by tray on first launch), then keychain.
 	token, err := keychain.LoadToken()
@@ -275,6 +280,15 @@ func run() {
 		}
 	})
 
+	// Sleep/resume detection — wall-clock drift watcher.
+	sleepWatcher := sleepwatch.New()
+	sleepWatcher.Start()
+	defer sleepWatcher.Stop()
+
+	// Wire Windows SCM power events → sleepwatch (Windows Service mode only).
+	// service.PowerEvents is only defined on Windows; use the platform relay helper.
+	forwardPowerEvents(sleepWatcher)
+
 	log.Printf("Agent started. Screenshot every %ds, sync every %ds, idle threshold %ds",
 		cfg.ScreenshotInterval, cfg.SyncInterval, cfg.IdleThreshold)
 
@@ -285,7 +299,7 @@ func run() {
 	syncTicker       := agentsync.NewJitteredTicker(time.Duration(cfg.SyncInterval) * time.Second)
 	inputTicker      := time.NewTicker(60 * time.Second)
 	metricsTicker    := time.NewTicker(60 * time.Second)
-	heartbeatTicker  := time.NewTicker(5 * time.Minute)
+	heartbeatTicker  := time.NewTicker(1 * time.Minute)
 	configTicker     := time.NewTicker(5 * time.Minute)
 	pruneTicker      := time.NewTicker(24 * time.Hour)
 	telemetryTicker  := time.NewTicker(60 * time.Second)
@@ -344,6 +358,28 @@ func run() {
 			}
 			log.Println("Agent shutdown complete.")
 			return
+
+		// ── Sleep / resume ─────────────────────────────────────────────────────
+		case event := <-sleepWatcher.C:
+			switch event.Type {
+			case sleepwatch.Suspend:
+				log.Printf("[sleep] system going to sleep — flushing buffers")
+				hq.FlushAll()
+				_ = db.Checkpoint()
+			case sleepwatch.Resume:
+				log.Printf("[sleep] system resumed after %v", event.Duration.Round(time.Second))
+				isAFK = false
+				hq.FlushAll()
+				capture.ResetIdleBaseline()
+				go func() {
+					client.ResetCircuit()
+					_ = client.Heartbeat()
+					_, _ = uploader.FlushActivity()
+					_, _ = uploader.FlushScreenshots()
+					_, _ = uploader.FlushMetrics()
+				}()
+				syncTicker.Reset(5 * time.Second)
+			}
 
 		// ── Window poll (1 second) ─────────────────────────────────────────────
 		case t := <-windowTicker.C:
@@ -541,7 +577,7 @@ func run() {
 			buffered := counts["activity"]
 			t := telemetryCollector.Collect(lastSyncSuccess, lastSyncLatencyMs, buffered, syncErrorCount)
 			syncErrorCount = 0 // reset after reporting
-			_ = client.Post("/agent/sync/telemetry", t)
+			client.PostBestEffort("/agent/sync/telemetry", t)
 		}
 	}
 }

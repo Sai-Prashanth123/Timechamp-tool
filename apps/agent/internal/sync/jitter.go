@@ -31,6 +31,24 @@ type jitteredTicker struct {
 // subsequent calls after the first are no-ops.
 func (t *jitteredTicker) Stop() { t.once.Do(func() { close(t.stop) }) }
 
+// Reset schedules an immediate tick after d, bypassing the jitter interval.
+// Useful after a system resume to trigger a fast re-sync without waiting the
+// full jitter window. Safe to call from any goroutine.
+func (t *jitteredTicker) Reset(d time.Duration) {
+	go func() {
+		timer := time.NewTimer(d)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			select {
+			case t.C <- time.Now():
+			default:
+			}
+		case <-t.stop:
+		}
+	}()
+}
+
 func (t *jitteredTicker) run() {
 	for {
 		// Full interval in [0.7*base, 1.3*base]
