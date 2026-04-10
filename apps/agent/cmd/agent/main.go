@@ -373,7 +373,9 @@ func run() {
 				capture.ResetIdleBaseline()
 				go func() {
 					client.ResetCircuit()
-					_ = client.Heartbeat()
+					// PostBestEffort: single attempt, no retry, bounded by HTTP timeout.
+					// Avoids blocking for minutes if the network isn't up yet post-wake.
+					client.PostBestEffort("/agent/sync/heartbeat", struct{}{})
 					_, _ = uploader.FlushActivity()
 					_, _ = uploader.FlushScreenshots()
 					_, _ = uploader.FlushMetrics()

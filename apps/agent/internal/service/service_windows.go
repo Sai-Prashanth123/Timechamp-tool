@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -28,7 +29,10 @@ const (
 // main.go reads this channel and forwards events to sleepwatch.Signal().
 // Only populated when running as a Windows Service (not when tray-launched).
 // WARNING: caller must drain this channel; buffer holds only 4 events before drops begin.
+// The channel is closed by the SCM stop handler so range-based consumers exit cleanly.
 var PowerEvents = make(chan string, 4)
+
+var powerEventsOnce sync.Once
 
 type windowsManager struct{}
 
@@ -197,6 +201,8 @@ func (a *agentSvc) Execute(args []string, r <-chan svc.ChangeRequest, changes ch
 			switch c.Cmd {
 			case svc.Stop, svc.Shutdown:
 				changes <- svc.Status{State: svc.StopPending}
+				// Close PowerEvents so the relay goroutine in main exits cleanly.
+				powerEventsOnce.Do(func() { close(PowerEvents) })
 				// Give mainFn up to 10 s to finish.
 				select {
 				case <-done:
