@@ -21,7 +21,7 @@ type CrashReport struct {
 	Arch         string    `json:"arch"`
 	OrgID        string    `json:"org_id"`
 	EmployeeID   string    `json:"employee_id"`
-	ErrorType    string    `json:"error_type"` // always "panic"
+	ErrorType    string    `json:"error_type"` // "panic" or "goroutine_panic"
 	Message      string    `json:"message"`
 	StackTrace   string    `json:"stack_trace"`
 	UptimeSec    int64     `json:"uptime_sec"`
@@ -57,7 +57,7 @@ func (r *Reporter) Recover() {
 	if v == nil {
 		return
 	}
-	buf := make([]byte, 8192)
+	buf := make([]byte, 16384)
 	n := runtime.Stack(buf, false)
 	report := CrashReport{
 		AgentVersion: r.version,
@@ -69,7 +69,7 @@ func (r *Reporter) Recover() {
 		Message:      fmt.Sprintf("%v", v),
 		StackTrace:   string(buf[:n]),
 		UptimeSec:    int64(time.Since(r.startedAt).Seconds()),
-		ReportedAt:   time.Now(),
+		ReportedAt:   time.Now().UTC(),
 	}
 	r.send(report)
 	panic(v) // re-panic so other deferred cleanup still runs
@@ -104,7 +104,7 @@ func (r *Reporter) send(report CrashReport) {
 	client := &http.Client{Timeout: 5 * time.Second}
 	apiURL := strings.TrimRight(r.apiURL, "/") + "/api/v1/agent/crash"
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if i > 0 {
 			time.Sleep(time.Second)
 		}

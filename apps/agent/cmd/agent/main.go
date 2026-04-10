@@ -247,6 +247,7 @@ func run() {
 	// Adapted from ActivityWatch aw-watcher-afk state machine.
 	// Tracks exact timestamps of AFK transitions instead of just checking idle.
 	afkThreshold := time.Duration(cfg.IdleThreshold) * time.Second
+	// isAFK is read and mutated only on the event-loop goroutine; no synchronisation needed.
 	isAFK := false
 
 	// Write PID file atomically (temp file + rename) so the tray never reads a
@@ -372,7 +373,7 @@ func run() {
 					isAFK = false
 					hq.FlushAll()
 					capture.ResetIdleBaseline()
-					go func() {
+					safeGo("sleep-resume-flush", crashReporter, func() {
 						client.ResetCircuit()
 						// PostBestEffort: single attempt, no retry, bounded by HTTP timeout.
 						// Avoids blocking for minutes if the network isn't up yet post-wake.
@@ -380,7 +381,7 @@ func run() {
 						_, _ = uploader.FlushActivity()
 						_, _ = uploader.FlushScreenshots()
 						_, _ = uploader.FlushMetrics()
-					}()
+					})
 					syncTicker.Reset(5 * time.Second)
 				}
 			})
@@ -596,9 +597,9 @@ func run() {
 				}
 				counts, _ := db.CountAll()
 				buffered := counts["activity"]
-				t := telemetryCollector.Collect(lastSyncSuccess, lastSyncLatencyMs, buffered, syncErrorCount)
+				snap := telemetryCollector.Collect(lastSyncSuccess, lastSyncLatencyMs, buffered, syncErrorCount)
 				syncErrorCount = 0 // reset after reporting
-				client.PostBestEffort("/agent/sync/telemetry", t)
+				client.PostBestEffort("/agent/sync/telemetry", snap)
 			})
 		}
 	}
