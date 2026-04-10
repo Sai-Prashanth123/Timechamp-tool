@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 )
 
 // platformInstallBinary writes the binary to DataDir and returns its path.
@@ -17,11 +16,8 @@ func platformInstallBinary(cfg Config) (string, error) {
 	if err := os.MkdirAll(cfg.DataDir, 0700); err != nil {
 		return "", fmt.Errorf("mkdir %s: %w", cfg.DataDir, err)
 	}
-	name := "timechamp-agent"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
-	}
-	dest := filepath.Join(cfg.DataDir, name)
+	// This file is excluded from Windows builds by its build tag — no .exe suffix needed.
+	dest := filepath.Join(cfg.DataDir, "timechamp-agent")
 	tmp := dest + ".tmp"
 	if err := os.WriteFile(tmp, cfg.BinaryData, 0755); err != nil {
 		return "", fmt.Errorf("write binary: %w", err)
