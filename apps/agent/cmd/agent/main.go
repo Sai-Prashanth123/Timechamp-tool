@@ -260,6 +260,37 @@ func run() {
 	// than per-event inserts because the WAL gets one fsync per batch.
 	batcher := buffer.NewWriteBatcher(db, 5*time.Second, 200)
 
+	// screenshotSig decouples the ticker from the capture pipeline.
+	// A buffered capacity of 1 means a slow capture naturally skips the next
+	// tick instead of queuing up — backpressure without memory growth.
+	screenshotSig := make(chan struct{}, 1)
+	safeGo("screenshot-worker", crashReporter, func() {
+		for {
+			select {
+			case <-runCtx.Done():
+				return
+			case <-screenshotSig:
+				path, err := capture.CaptureScreenshot(screenshotsDir)
+				if err != nil {
+					if buffer.IsDiskFull(err) {
+						log.Printf("[screenshot] CRITICAL: disk full — cannot store screenshot")
+					} else {
+						log.Printf("[screenshot] capture failed: %v", err)
+					}
+					continue
+				}
+				if err := db.InsertScreenshot(buffer.ScreenshotRecord{
+					EmployeeID: cfg.EmployeeID,
+					OrgID:      cfg.OrgID,
+					LocalPath:  path,
+					CapturedAt: time.Now().UTC(),
+				}); err != nil {
+					log.Printf("[screenshot] buffer insert failed: %v", err)
+				}
+			}
+		}
+	})
+
 	hq := heartbeat.NewQueue(commitThresh, func(e heartbeat.Event) {
 		// Called when a merged event is ready to persist — route via batcher.
 		batcher.Add(buffer.ActivityEvent{
@@ -278,7 +309,6 @@ func run() {
 	// ── AFK state machine ─────────────────────────────────────────────────────
 	// Adapted from ActivityWatch aw-watcher-afk state machine.
 	// Tracks exact timestamps of AFK transitions instead of just checking idle.
-	afkThreshold := time.Duration(cfg.IdleThreshold) * time.Second
 	// isAFK is read and mutated only on the event-loop goroutine; no synchronisation needed.
 	isAFK := false
 
@@ -531,29 +561,15 @@ func run() {
 		// ── Screenshots ────────────────────────────────────────────────────────
 		case <-screenshotTicker.C:
 			withRecover("screenshot-tick", crashReporter, func() {
-				// Skip if no screen recording permission (macOS) or user is idle.
-				if !capture.HasScreenRecording() {
-					return // was: continue
+				// AFK / permission checks happen here (on the event-loop goroutine
+				// where isAFK is safe to read). Only send the signal if we should capture.
+				if isAFK || !capture.HasScreenRecording() {
+					return
 				}
-				idleSec, _ := capture.IdleSeconds()
-				if time.Duration(idleSec)*time.Second >= afkThreshold {
-					return // was: continue
-				}
-
-				path, err := capture.CaptureScreenshot(screenshotsDir)
-				if err != nil {
-					log.Printf("Screenshot failed: %v", err)
-					return // was: continue
-				}
-				if err := db.InsertScreenshot(buffer.ScreenshotRecord{
-					EmployeeID: cfg.EmployeeID,
-					OrgID:      cfg.OrgID,
-					LocalPath:  path,
-					CapturedAt: time.Now(),
-				}); err != nil {
-					if buffer.IsDiskFull(err) {
-						log.Printf("CRITICAL: disk full — cannot store screenshot. Free disk space to resume recording.")
-					}
+				select {
+				case screenshotSig <- struct{}{}:
+				default:
+					log.Printf("[screenshot] skipping tick: previous capture still in progress")
 				}
 			})
 
