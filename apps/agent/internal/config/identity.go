@@ -10,14 +10,18 @@ import (
 type Identity struct {
 	OrgID      string `json:"orgId"`
 	EmployeeID string `json:"employeeId"`
+	APIURL     string `json:"apiUrl,omitempty"`
 }
 
-// SaveIdentity writes orgID and employeeID to a JSON file in dataDir.
-func SaveIdentity(dataDir, orgID, employeeID string) error {
+// SaveIdentity writes orgID, employeeID, and apiURL to a JSON file in dataDir.
+func SaveIdentity(dataDir, orgID, employeeID string, apiURL ...string) error {
 	if err := os.MkdirAll(dataDir, 0700); err != nil {
 		return err
 	}
 	id := Identity{OrgID: orgID, EmployeeID: employeeID}
+	if len(apiURL) > 0 {
+		id.APIURL = apiURL[0]
+	}
 	data, err := json.Marshal(id)
 	if err != nil {
 		return err

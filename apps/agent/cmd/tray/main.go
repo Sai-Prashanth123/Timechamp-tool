@@ -9,6 +9,9 @@ package main
 
 import (
 	"embed"
+	"os"
+	"syscall"
+	"unsafe"
 
 	"github.com/energye/systray"
 	"github.com/wailsapp/wails/v2"
@@ -20,10 +23,34 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
-//go:embed agent_bin
+//go:embed agent_bin.exe
 var agentBinary []byte
 
+// singleInstance creates a named Windows mutex. Returns the handle (must stay
+// open for the lifetime of the process) and whether this is the first instance.
+func singleInstance() (syscall.Handle, bool) {
+	name, _ := syscall.UTF16PtrFromString("Local\\TimechampTrayApp")
+	kernel32 := syscall.NewLazyDLL("kernel32.dll")
+	h, _, err := kernel32.NewProc("CreateMutexW").Call(
+		0,
+		1,
+		uintptr(unsafe.Pointer(name)),
+	)
+	if h == 0 {
+		return 0, false
+	}
+	// ERROR_ALREADY_EXISTS (183) means another instance owns the mutex.
+	alreadyExists := err.(syscall.Errno) == 183
+	return syscall.Handle(h), !alreadyExists
+}
+
 func main() {
+	_, first := singleInstance()
+	if !first {
+		// Another instance is already running — exit silently.
+		os.Exit(0)
+	}
+
 	app := NewApp(agentBinary)
 
 	// System tray runs in its own goroutine — energye/systray is safe to call
