@@ -228,7 +228,7 @@ func bootstrapAgent(plistPath, binaryPath string) (warnings []string, err error)
 	if isMDMBlocked(exitCode, string(out)) {
 		// Best-effort: launch binary directly for this session only.
 		cmd := exec.Command(binaryPath)
-		cmd.Env = append(os.Environ())
+		cmd.Env = os.Environ()
 		cmd.Start() //nolint:errcheck
 		return []string{
 			"MDM_BLOCKED: Your organisation's IT policy blocked background agent registration. " +
