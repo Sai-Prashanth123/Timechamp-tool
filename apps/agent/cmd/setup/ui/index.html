@@ -235,7 +235,7 @@
       msgEl.textContent = message;
       msgEl.className   = 'step-msg' + (state === 'error' ? ' error-msg' : '');
       msgEl.style.display = 'block';
-    } else if (state === 'pending') {
+    } else if (state === 'pending' || !message) {
       msgEl.style.display = 'none';
     }
   }
@@ -247,6 +247,11 @@
 
     if (!token) {
       errEl.textContent = 'Please paste your invite token.';
+      errEl.style.display = 'block';
+      return;
+    }
+    if (!apiUrl) {
+      errEl.textContent = 'Please enter an API URL.';
       errEl.style.display = 'block';
       return;
     }
@@ -272,6 +277,8 @@
     es.onmessage = function(evt) {
       let data;
       try { data = JSON.parse(evt.data); } catch(e) { return; }
+
+      if (data.step && !STEP_DEFS.some(function(s) { return s.key === data.step; })) { return; }
 
       if (data.error) {
         setStepState(data.step, 'error', data.error);
@@ -332,6 +339,14 @@
       if (secs <= 0) {
         clearInterval(iv);
         window.close();
+        setTimeout(function() {
+          // window.close() may be blocked by the browser if not script-opened
+          if (!window.closed) {
+            banner.innerHTML = escHtml(msg) +
+              ' <span class="countdown">Setup complete — you may close this tab.</span>';
+          }
+        }, 300);
+        return;
       }
     }, 1000);
   }
