@@ -20,6 +20,7 @@ type Metrics struct {
 	HasScreenRecording bool
 	HasAccessibility   bool
 	URLDetectionLayer  int32
+	DroppedEvents      uint64
 }
 
 // Server exposes a local HTTP /health endpoint for liveness checks.
@@ -43,6 +44,7 @@ type Response struct {
 	HasScreenRecording bool      `json:"has_screen_recording"`
 	HasAccessibility   bool      `json:"has_accessibility"`
 	URLDetectionLayer  int32     `json:"url_detection_layer"`
+	DroppedEvents      uint64    `json:"dropped_events"`
 }
 
 func New(version string) *Server {
@@ -98,5 +100,6 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		HasScreenRecording: m.HasScreenRecording,
 		HasAccessibility:   m.HasAccessibility,
 		URLDetectionLayer:  m.URLDetectionLayer,
+		DroppedEvents:      m.DroppedEvents,
 	})
 }

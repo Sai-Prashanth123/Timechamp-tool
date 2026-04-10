@@ -643,6 +643,7 @@ func run() {
 					HasScreenRecording: capture.HasScreenRecording(),
 					HasAccessibility:   capture.HasAccessibility(),
 					URLDetectionLayer:  capture.URLDetectionLayer.Load(),
+					DroppedEvents:      db.DroppedEvents.Load(),
 				})
 			})
 

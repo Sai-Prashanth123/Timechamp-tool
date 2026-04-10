@@ -1,18 +1,22 @@
 package buffer
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
 
 // DB wraps the SQLite connection for the local event buffer.
 type DB struct {
-	conn *sql.DB
+	conn          *sql.DB
+	DroppedEvents atomic.Uint64 // count of events dropped due to disk-full or WAL cap
 }
 
 // Open opens (or creates) the SQLite database in dir.
@@ -32,7 +36,7 @@ func Open(dir string) (*DB, error) {
 	// Cap WAL file at 64 MB and auto-checkpoint every 1000 pages (~4 MB).
 	// Prevents unbounded WAL growth on long-running agents.
 	conn.Exec(`PRAGMA journal_size_limit=67108864`) //nolint:errcheck
-	conn.Exec(`PRAGMA wal_autocheckpoint=1000`)     //nolint:errcheck
+	conn.Exec(`PRAGMA wal_autocheckpoint=200`)      //nolint:errcheck // ~800KB trigger
 
 	db := &DB{conn: conn}
 	if err := db.migrate(); err != nil {
@@ -50,8 +54,12 @@ func (db *DB) Close() error {
 
 // Checkpoint forces a WAL checkpoint, truncating the WAL file.
 // Call this daily or on graceful shutdown to reclaim disk space.
+// A 10-second timeout prevents checkpoint from blocking indefinitely on
+// a locked WAL (e.g. during a crash or slow reader).
 func (db *DB) Checkpoint() error {
-	_, err := db.conn.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := db.conn.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`)
 	return err
 }
 

@@ -2,6 +2,7 @@ package buffer
 
 import (
 	"fmt"
+	"log"
 	"strings"
 	"time"
 )
@@ -53,6 +54,10 @@ func (db *DB) InsertActivity(e ActivityEvent) error {
 		e.Category, e.DurationMs,
 		e.StartedAt.UTC(), e.EndedAt.UTC(), boolToInt(e.Synced),
 	)
+	if err != nil && IsDiskFull(err) {
+		db.DroppedEvents.Add(1)
+		log.Printf("[buffer] activity event dropped (disk full or WAL cap): %v", err)
+	}
 	return err
 }
 
@@ -100,6 +105,10 @@ func (db *DB) InsertScreenshot(s ScreenshotRecord) error {
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		s.EmployeeID, s.OrgID, s.LocalPath, s.S3Key, s.CapturedAt.UTC(), boolToInt(s.Synced),
 	)
+	if err != nil && IsDiskFull(err) {
+		db.DroppedEvents.Add(1)
+		log.Printf("[buffer] screenshot record dropped (disk full or WAL cap): %v", err)
+	}
 	return err
 }
 
@@ -138,6 +147,10 @@ func (db *DB) InsertKeystroke(e KeystrokeEvent) error {
 		 VALUES (?, ?, ?, ?, ?, 0)`,
 		e.EmployeeID, e.OrgID, e.KeysPerMin, e.MousePerMin, e.RecordedAt.UTC(),
 	)
+	if err != nil && IsDiskFull(err) {
+		db.DroppedEvents.Add(1)
+		log.Printf("[buffer] keystroke record dropped (disk full or WAL cap): %v", err)
+	}
 	return err
 }
 
@@ -190,6 +203,10 @@ func (db *DB) InsertMetrics(e SystemMetricsEvent) error {
 		e.EmployeeID, e.OrgID, e.CPUPercent, e.MemUsedMB, e.MemTotalMB,
 		e.AgentCPUPercent, e.AgentMemMB, e.RecordedAt.UTC(),
 	)
+	if err != nil && IsDiskFull(err) {
+		db.DroppedEvents.Add(1)
+		log.Printf("[buffer] metrics record dropped (disk full or WAL cap): %v", err)
+	}
 	return err
 }
 
