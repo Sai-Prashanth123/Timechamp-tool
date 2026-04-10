@@ -111,12 +111,15 @@ func (m *Manager) run() {
 				// then reconnect with retry.
 				m.client.closeConn("heartbeat timeout")
 				if err := m.client.ConnectWithRetry(ctx); err != nil {
-					log.Printf("[stream] reconnect failed: %v", err)
-					return
+					log.Printf("[stream] reconnect failed after retries: %v — pausing stream (will retry on next heartbeat timeout)", err)
+					m.SetMode(ModeIdle)
+					continue // stay in loop — don't exit manager
 				}
 				go m.handleControlFrames(ctx)
 			}
-			_ = m.client.SendFrame(ctx, BuildHeartbeatFrame())
+			if err := m.client.SendFrame(ctx, BuildHeartbeatFrame()); err != nil {
+				log.Printf("[stream] heartbeat send error: %v", err)
+			}
 
 		case <-screenTicker.C:
 			mode := m.currentMode()
@@ -136,7 +139,9 @@ func (m *Manager) run() {
 			if err != nil {
 				continue
 			}
-			_ = m.client.SendFrame(ctx, BuildFrame(frameType, data))
+			if err := m.client.SendFrame(ctx, BuildFrame(frameType, data)); err != nil {
+				log.Printf("[stream] screen frame send error: %v", err)
+			}
 
 		case <-cameraTicker.C:
 			mode := m.currentMode()
@@ -147,7 +152,9 @@ func (m *Manager) run() {
 			if err != nil {
 				continue // non-fatal
 			}
-			_ = m.client.SendFrame(ctx, BuildFrame(FrameTypeCamera, data))
+			if err := m.client.SendFrame(ctx, BuildFrame(FrameTypeCamera, data)); err != nil {
+				log.Printf("[stream] camera frame send error: %v", err)
+			}
 
 		case <-audioTicker.C:
 			mode := m.currentMode()
@@ -158,7 +165,9 @@ func (m *Manager) run() {
 			if err != nil {
 				continue // non-fatal
 			}
-			_ = m.client.SendFrame(ctx, BuildFrame(FrameTypeAudio, data))
+			if err := m.client.SendFrame(ctx, BuildFrame(FrameTypeAudio, data)); err != nil {
+				log.Printf("[stream] audio frame send error: %v", err)
+			}
 		}
 	}
 }

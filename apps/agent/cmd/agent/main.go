@@ -750,34 +750,44 @@ func listenBrowserURLs() {
 		URL  string `json:"url,omitempty"`
 	}
 
+	// sem caps concurrent handler goroutines to 8 so a burst of browser
+	// connections can't exhaust the goroutine pool.
+	sem := make(chan struct{}, 8)
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		go func(c net.Conn) {
-			defer c.Close()
-			c.SetReadDeadline(time.Now().Add(2 * time.Second))
+		select {
+		case sem <- struct{}{}:
+			go func(c net.Conn) {
+				defer func() { <-sem }()
+				defer c.Close()
+				c.SetReadDeadline(time.Now().Add(2 * time.Second))
 
-			var length uint32
-			if err := binary.Read(c, binary.LittleEndian, &length); err != nil {
-				return
-			}
-			if length > 4096 {
-				return
-			}
-			buf := make([]byte, length)
-			if _, err := io.ReadFull(c, buf); err != nil {
-				return
-			}
-			var msg urlMsg
-			if err := json.Unmarshal(buf, &msg); err != nil {
-				return
-			}
-			if msg.Type == "url" && msg.URL != "" {
-				urlCache.Store(msg.URL)
-			}
-		}(conn)
+				var length uint32
+				if err := binary.Read(c, binary.LittleEndian, &length); err != nil {
+					return
+				}
+				if length > 4096 {
+					return
+				}
+				buf := make([]byte, length)
+				if _, err := io.ReadFull(c, buf); err != nil {
+					return
+				}
+				var msg urlMsg
+				if err := json.Unmarshal(buf, &msg); err != nil {
+					return
+				}
+				if msg.Type == "url" && msg.URL != "" {
+					urlCache.Store(msg.URL)
+				}
+			}(conn)
+		default:
+			log.Printf("[browser-urls] at capacity (8 connections) — rejecting")
+			conn.Close()
+		}
 	}
 }
 
