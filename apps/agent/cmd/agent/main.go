@@ -654,6 +654,12 @@ func run() {
 				}
 				// Push live state to health endpoint so tray / monitoring see current health.
 				bufferedForHealth, _ := db.CountActivity()
+				if bufferedForHealth > 6000 {
+					log.Printf("[sync] WARNING: buffer depth=%d (>6000), increasing sync frequency", bufferedForHealth)
+				}
+				if bufferedForHealth > 9500 {
+					log.Printf("[sync] CRITICAL: buffer depth=%d (>9500) — events may be dropped soon", bufferedForHealth)
+				}
 				healthSrv.SetMetrics(health.Metrics{
 					BufferDepth:        bufferedForHealth,
 					SyncHealthy:        lastSyncSuccess,
@@ -663,6 +669,8 @@ func run() {
 					URLDetectionLayer:  capture.URLDetectionLayer.Load(),
 					DroppedEvents:      db.DroppedEvents.Load(),
 				})
+				// Adapt sync frequency to drain a growing buffer faster.
+				syncTicker.Reset(adaptiveSyncInterval(bufferedForHealth))
 			})
 
 		// ── Heartbeat ──────────────────────────────────────────────────────────

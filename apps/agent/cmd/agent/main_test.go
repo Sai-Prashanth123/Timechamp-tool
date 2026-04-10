@@ -1,6 +1,31 @@
 package main
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
+
+func TestAdaptiveSyncInterval(t *testing.T) {
+	cases := []struct {
+		depth int
+		want  time.Duration
+	}{
+		{0, 30 * time.Second},
+		{1999, 30 * time.Second},
+		{2000, 15 * time.Second},
+		{5999, 15 * time.Second},
+		{6000, 7 * time.Second},
+		{7999, 7 * time.Second},
+		{8000, 3 * time.Second},
+		{10000, 3 * time.Second},
+	}
+	for _, c := range cases {
+		got := adaptiveSyncInterval(c.depth)
+		if got != c.want {
+			t.Errorf("adaptiveSyncInterval(%d) = %v, want %v", c.depth, got, c.want)
+		}
+	}
+}
 
 func TestMedianUint32(t *testing.T) {
 	cases := []struct {
