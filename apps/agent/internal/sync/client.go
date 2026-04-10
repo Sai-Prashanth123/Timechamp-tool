@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -122,16 +124,19 @@ func (c *Client) Post(path string, body any) error {
 		resp, err := c.http.Do(req)
 		if err != nil {
 			c.recordFailure()
+			log.Printf("[sync] POST %s failed (failures=%d): %v", path, c.failures, err)
 			return false, fmt.Errorf("request failed: %w", err)
 		}
 		_, _ = io.Copy(io.Discard, resp.Body) // drain body to allow connection reuse
 		resp.Body.Close()
 
 		if isPermanentHTTPStatus(resp.StatusCode) {
+			log.Printf("[sync] POST %s permanent error HTTP %d", path, resp.StatusCode)
 			return true, fmt.Errorf("permanent HTTP %d for %s", resp.StatusCode, path)
 		}
 		if resp.StatusCode >= 400 {
 			c.recordFailure()
+			log.Printf("[sync] POST %s HTTP %d (failures=%d)", path, resp.StatusCode, c.failures)
 			return false, fmt.Errorf("HTTP %d for %s", resp.StatusCode, path)
 		}
 		// Success
@@ -181,6 +186,11 @@ func (c *Client) GetPresignedUploadURL(filename string) (uploadURL, s3Key string
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", "", fmt.Errorf("presign URL request failed (HTTP %d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
 	var result struct {
 		Data struct {
 			UploadURL string `json:"uploadUrl"`
@@ -190,7 +200,34 @@ func (c *Client) GetPresignedUploadURL(filename string) (uploadURL, s3Key string
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return "", "", err
 	}
+	if result.Data.UploadURL == "" {
+		return "", "", fmt.Errorf("presign URL response contained empty uploadUrl")
+	}
 	return result.Data.UploadURL, result.Data.S3Key, nil
+}
+
+// PostBestEffort sends a single fire-and-forget POST that does NOT affect the
+// circuit breaker and has no retries. Use for non-critical telemetry data where
+// a timeout or transient error must not degrade core sync functionality.
+func (c *Client) PostBestEffort(path string, body any) {
+	data, err := json.Marshal(body)
+	if err != nil {
+		return
+	}
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+path, bytes.NewReader(data))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("X-Agent-Version", agentVersion)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
 }
 
 // SaveScreenshotMeta notifies the API of a completed screenshot upload.
@@ -247,6 +284,14 @@ func (c *Client) recordFailure() {
 		c.circuitOpen = true
 		c.openedAt = time.Now()
 	}
+}
+
+// ResetCircuit clears an open circuit breaker so syncs can resume immediately
+// after a system resume event. Pre-sleep failures are stale and should not
+// block the first post-wake sync.
+func (c *Client) ResetCircuit() {
+	c.failures = 0
+	c.circuitOpen = false
 }
 
 // agentVersion is embedded at build time via -ldflags "-X ...agentVersion=x.y.z".
