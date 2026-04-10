@@ -372,10 +372,13 @@ func run() {
 
 	inputCounter := &capture.InputCounter{}
 
+	// classifierCache avoids re-running 50+ regexes for apps seen before.
+	classifierCache := classifier.NewCache(512)
+
 	pushWindow := func(win capture.ActiveWindow, ts time.Time) {
 		extURL := urlCache.Load().(string)
 		url := capture.ResolveURL(win, extURL)
-		cat := classifier.Classify(win.AppName, win.WindowTitle, url, classifier.DefaultRules)
+		cat := classifierCache.Classify(win.AppName, win.WindowTitle, url, classifier.DefaultRules)
 		hq.Push(windowStream, heartbeat.Event{
 			Timestamp: ts,
 			Duration:  1 * time.Second,

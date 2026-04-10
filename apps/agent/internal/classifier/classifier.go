@@ -6,6 +6,7 @@ package classifier
 import (
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // Category is a dot-delimited path string, e.g. "Work.Development".
@@ -53,6 +54,58 @@ func Classify(app, title, url string, rules []Rule) Category {
 		}
 	}
 	return "Uncategorized"
+}
+
+// Cache wraps the classifier with a simple LRU cache to avoid re-running
+// 50+ regexes for apps the agent has already seen in the same session.
+type Cache struct {
+	mu      sync.Mutex
+	entries map[string]string // key → category
+	keys    []string          // insertion order for FIFO eviction
+	maxSize int
+}
+
+// NewCache creates a classification cache with the given capacity.
+func NewCache(maxSize int) *Cache {
+	return &Cache{
+		entries: make(map[string]string, maxSize),
+		keys:    make([]string, 0, maxSize),
+		maxSize: maxSize,
+	}
+}
+
+// Classify returns the category, using the cache for repeated lookups.
+func (c *Cache) Classify(app, title, url string, rules []Rule) string {
+	key := cacheKey(app, title)
+
+	c.mu.Lock()
+	if cat, ok := c.entries[key]; ok {
+		c.mu.Unlock()
+		return cat
+	}
+	c.mu.Unlock()
+
+	cat := Classify(app, title, url, rules) // call existing package-level func
+
+	c.mu.Lock()
+	if len(c.entries) >= c.maxSize {
+		// FIFO eviction: remove oldest key.
+		oldest := c.keys[0]
+		c.keys = c.keys[1:]
+		delete(c.entries, oldest)
+	}
+	c.entries[key] = cat
+	c.keys = append(c.keys, key)
+	c.mu.Unlock()
+	return cat
+}
+
+func cacheKey(app, title string) string {
+	t := title
+	if len(t) > 32 {
+		t = t[:32]
+	}
+	return app + "|" + t
 }
 
 // MustCompile builds a Rule and panics on bad regex (for use in init vars).
