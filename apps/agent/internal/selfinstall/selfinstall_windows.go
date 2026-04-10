@@ -50,12 +50,21 @@ func platformInstallBinary(cfg Config) (string, error) {
 		time.Sleep(500 * time.Millisecond)
 	}
 	if writeErr != nil {
+		os.Remove(tmp) //nolint:errcheck — best-effort cleanup
 		return "", fmt.Errorf("write binary: %w", writeErr)
 	}
 
-	if err := os.Rename(tmp, dest); err != nil {
+	var renameErr error
+	for range 3 {
+		renameErr = os.Rename(tmp, dest)
+		if renameErr == nil {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if renameErr != nil {
 		_ = os.Remove(tmp)
-		return "", fmt.Errorf("rename binary: %w", err)
+		return "", fmt.Errorf("rename binary: %w", renameErr)
 	}
 	return dest, nil
 }
@@ -107,6 +116,14 @@ func platformStartAgent(binaryPath, apiURL string) error {
 	cmd.Env = append(os.Environ(), "TC_API_URL="+apiURL)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
+	}
+	// Redirect stdio so the background agent does not inherit the installer's
+	// console handles, which would keep them open and block handle closure.
+	cmd.Stdin = nil
+	devNull, err := os.Open(os.DevNull)
+	if err == nil {
+		cmd.Stdout = devNull
+		cmd.Stderr = devNull
 	}
 	return cmd.Start()
 }
@@ -218,6 +235,8 @@ func installService(binaryPath string) (bool, error) {
 			return true, nil
 		}
 	}
+	// Elevated process timed out or crashed — clean up the handoff file.
+	os.Remove(handoffPath) //nolint:errcheck
 	return false, nil
 }
 
@@ -254,9 +273,12 @@ func doInstallService(binaryPath string) error {
 // Returns error if the user declines UAC or the call fails.
 func shellExecuteRunas(exe, args string) error {
 	verb, _ := syscall.UTF16PtrFromString("runas")
-	file, _ := syscall.UTF16PtrFromString(exe)
+	file, err := syscall.UTF16PtrFromString(exe)
+	if err != nil {
+		return fmt.Errorf("encode exe path: %w", err)
+	}
 	params, _ := syscall.UTF16PtrFromString(args)
-	if err := windows.ShellExecute(0, verb, file, params, nil, windows.SW_HIDE); err != nil {
+	if err = windows.ShellExecute(0, verb, file, params, nil, windows.SW_HIDE); err != nil {
 		return fmt.Errorf("ShellExecute runas: %w (UAC declined or unavailable)", err)
 	}
 	return nil
