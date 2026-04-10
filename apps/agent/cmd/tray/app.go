@@ -19,6 +19,7 @@ import (
 	"github.com/energye/systray"
 	"github.com/timechamp/agent/internal/config"
 	"github.com/timechamp/agent/internal/keychain"
+	"github.com/timechamp/agent/internal/sleepwatch"
 	agentsync "github.com/timechamp/agent/internal/sync"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -27,6 +28,8 @@ import (
 type App struct {
 	ctx         context.Context
 	agentBinary []byte
+	sleepWatcher *sleepwatch.Watcher // detects system resume events
+	wakeSignal   chan struct{}        // buffered(1) — signals monitorAgent to wake early
 }
 
 // NewApp creates a new App instance.
@@ -38,6 +41,10 @@ func NewApp(binary []byte) *App {
 // If a token already exists (returning user), auto-launch the agent.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	a.wakeSignal = make(chan struct{}, 1)
+	a.sleepWatcher = sleepwatch.New()
+	a.sleepWatcher.Start()
+	go a.handlePowerEvents()
 	go a.autoLaunchIfRegistered()
 	go a.monitorAgent()
 }
@@ -57,6 +64,13 @@ func (a *App) autoLaunchIfRegistered() {
 		return // already running
 	}
 
+	// Prefer the API URL saved in identity.json (written during Register) over
+	// the tray's own config default, which falls back to the production URL.
+	apiURL := cfg.APIURL
+	if identity, err := config.LoadIdentity(cfg.DataDir); err == nil && identity.APIURL != "" {
+		apiURL = identity.APIURL
+	}
+
 	agentPath, err := a.extractAgent(cfg.DataDir)
 	if err != nil {
 		return
@@ -64,7 +78,7 @@ func (a *App) autoLaunchIfRegistered() {
 
 	cmd := exec.Command(agentPath)
 	// Only pass TC_API_URL — agent reads auth token from OS keychain.
-	cmd.Env = append(os.Environ(), "TC_API_URL="+cfg.APIURL)
+	cmd.Env = append(os.Environ(), "TC_API_URL="+apiURL)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
 	}
@@ -113,7 +127,7 @@ func (a *App) Register(apiURL, inviteToken string) error {
 	}
 
 	cfg := config.Load()
-	if err := config.SaveIdentity(cfg.DataDir, orgID, employeeID); err != nil {
+	if err := config.SaveIdentity(cfg.DataDir, orgID, employeeID, apiURL); err != nil {
 		return fmt.Errorf("save identity: %w", err)
 	}
 
@@ -184,36 +198,126 @@ func (a *App) isAgentRunning(dataDir string) bool {
 	return proc.Signal(os.Signal(nil)) == nil
 }
 
+// handlePowerEvents listens for wall-clock-drift resume events and triggers
+// an immediate agent restart check, bypassing the monitorAgent backoff timer.
+func (a *App) handlePowerEvents() {
+	for event := range a.sleepWatcher.C {
+		if event.Type == sleepwatch.Resume {
+			log.Printf("[tray] system resumed after %v — checking agent",
+				event.Duration.Round(time.Second))
+			// Unblock monitorAgent immediately (non-blocking send).
+			select {
+			case a.wakeSignal <- struct{}{}:
+			default:
+			}
+			go a.restartAgentIfNeeded()
+		}
+	}
+}
+
 // monitorAgent runs forever, restarting the agent if it exits unexpectedly.
 // Uses exponential backoff (10s → 5m) to avoid thrashing on repeated failures.
+// The wakeSignal channel allows resume events to interrupt the backoff wait.
 func (a *App) monitorAgent() {
 	const (
 		minBackoff = 10 * time.Second
 		maxBackoff = 5 * time.Minute
 	)
 	backoff := minBackoff
+	timer := time.NewTimer(backoff)
+	defer timer.Stop()
 
 	for {
-		time.Sleep(backoff)
+		select {
+		case <-timer.C:
+			// Normal poll interval elapsed.
+		case <-a.wakeSignal:
+			// Wake signal from sleepwatch — check immediately.
+			// Stop and drain the timer to prevent a spurious double-fire.
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			backoff = minBackoff
+		}
 
 		token, err := keychain.LoadToken()
 		if err != nil || token == "" {
-			backoff = minBackoff // not registered, reset
+			backoff = minBackoff
+			timer.Reset(backoff)
 			continue
 		}
 
 		cfg := config.Load()
 		if a.isAgentRunning(cfg.DataDir) {
-			backoff = minBackoff // healthy, reset backoff
+			backoff = minBackoff
+			timer.Reset(backoff)
 			continue
 		}
 
-		// Agent not running — restart with backoff
+		// Agent not running — restart with backoff.
 		a.autoLaunchIfRegistered()
 		backoff *= 2
 		if backoff > maxBackoff {
 			backoff = maxBackoff
 		}
+		timer.Reset(backoff)
+	}
+}
+
+// restartAgentIfNeeded is called immediately on resume. It checks the agent
+// health endpoint (3s timeout); if unhealthy, kills the stale process and
+// relaunches. This provides ≤10s recovery instead of the full backoff delay.
+func (a *App) restartAgentIfNeeded() {
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get("http://127.0.0.1:27183/health")
+	if err == nil {
+		resp.Body.Close()
+		if resp.StatusCode == 200 {
+			return // agent is alive and healthy
+		}
+	}
+	if resp != nil {
+		resp.Body.Close()
+	}
+
+	cfg := config.Load()
+	a.stopAgentByPID(cfg.DataDir)
+	a.autoLaunchIfRegistered()
+}
+
+// stopAgentByPID sends SIGTERM to the agent PID from the PID file, waits up
+// to 3 seconds for a clean exit, then sends SIGKILL if it is still alive.
+func (a *App) stopAgentByPID(dataDir string) {
+	pidFile := filepath.Join(dataDir, "agent.pid")
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		return
+	}
+	var pid int
+	if err := json.Unmarshal(data, &pid); err != nil {
+		return
+	}
+
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return
+	}
+
+	_ = proc.Signal(syscall.SIGTERM)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		proc.Wait() //nolint:errcheck
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		_ = proc.Kill()
 	}
 }
 
