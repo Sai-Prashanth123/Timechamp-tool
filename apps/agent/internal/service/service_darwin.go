@@ -141,8 +141,11 @@ func (m *darwinManager) Install(binaryPath string) error {
 	// Check if already loaded — kickstart to apply any binary change.
 	listOut, _ := exec.Command("launchctl", "list", launchAgentLabel).CombinedOutput()
 	if strings.Contains(string(listOut), launchAgentLabel) {
-		exec.Command("launchctl", "kickstart", "-k", //nolint:errcheck
-			fmt.Sprintf("%s/%s", guiDomain, launchAgentLabel)).Run()
+		ksOut, ksErr := exec.Command("launchctl", "kickstart", "-k",
+			fmt.Sprintf("%s/%s", guiDomain, launchAgentLabel)).CombinedOutput()
+		if ksErr != nil {
+			return fmt.Errorf("launchctl kickstart: %w — %s", ksErr, ksOut)
+		}
 		return nil
 	}
 
