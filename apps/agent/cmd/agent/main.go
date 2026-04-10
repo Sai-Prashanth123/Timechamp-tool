@@ -106,22 +106,53 @@ func run() {
 		}
 
 		hostname, _ := os.Hostname()
-		regToken, employeeID, orgID, regErr := agentsync.Register(
-			cfg.APIURL, inviteToken, hostname, runtime.GOOS, osVersion(),
+		const maxRegAttempts = 5
+		var (
+			regToken   string
+			employeeID string
+			orgID      string
+			regErr     error
 		)
+		for i := range maxRegAttempts {
+			if i > 0 {
+				wait := time.Duration(10*(1<<uint(i))) * time.Second
+				log.Printf("[agent] registration attempt %d/%d — retrying in %s", i+1, maxRegAttempts, wait)
+				time.Sleep(wait)
+			}
+			regToken, employeeID, orgID, regErr = agentsync.Register(
+				cfg.APIURL, inviteToken, hostname, runtime.GOOS, osVersion(),
+			)
+			if regErr == nil {
+				break
+			}
+			log.Printf("[agent] registration failed (attempt %d/%d): %v", i+1, maxRegAttempts, regErr)
+		}
 		if regErr != nil {
-			log.Fatalf("Registration failed: %v", regErr)
-		}
-		if saveErr := keychain.SaveToken(regToken); saveErr != nil {
-			log.Fatalf("Failed to save token: %v", saveErr)
-		}
-		if saveErr := config.SaveIdentity(cfg.DataDir, orgID, employeeID); saveErr != nil {
-			log.Fatalf("Failed to save identity: %v", saveErr)
+			// Fallback: if previously registered, use saved token and identity.
+			savedToken, tokenErr := keychain.LoadToken()
+			if tokenErr != nil || savedToken == "" {
+				log.Fatalf("[agent] registration failed after %d attempts and no saved token: %v", maxRegAttempts, regErr)
+			}
+			regToken = savedToken
+			identity, idErr := config.LoadIdentity(cfg.DataDir)
+			if idErr != nil {
+				log.Fatalf("[agent] registration failed and cannot load identity: %v", idErr)
+			}
+			orgID = identity.OrgID
+			employeeID = identity.EmployeeID
+			log.Printf("[agent] using existing keychain token (API unreachable at startup)")
+		} else {
+			if saveErr := keychain.SaveToken(regToken); saveErr != nil {
+				log.Fatalf("Failed to save token: %v", saveErr)
+			}
+			if saveErr := config.SaveIdentity(cfg.DataDir, orgID, employeeID); saveErr != nil {
+				log.Fatalf("Failed to save identity: %v", saveErr)
+			}
+			log.Printf("Agent registered for org %s employee %s", orgID, employeeID)
 		}
 		token = regToken
 		cfg.OrgID = orgID
 		cfg.EmployeeID = employeeID
-		log.Printf("Agent registered for org %s employee %s", orgID, employeeID)
 	}
 
 	// Crash reporter: catches panics, sends stack trace to API, then re-panics.
