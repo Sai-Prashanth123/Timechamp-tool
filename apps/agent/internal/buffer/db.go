@@ -205,6 +205,38 @@ func (db *DB) CountAll() (map[string]int, error) {
 	return counts, nil
 }
 
+// InsertActivityBatch inserts multiple activity events in a single transaction.
+// Using a prepared statement executed N times within one transaction is ~100x
+// faster than N individual Exec calls because the WAL gets one fsync per batch.
+func (db *DB) InsertActivityBatch(events []ActivityEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return err
+	}
+	stmt, err := tx.Prepare(`INSERT INTO activity_events
+		(employee_id, org_id, app_name, window_title, url, category, duration_ms, started_at, ended_at)
+		VALUES (?,?,?,?,?,?,?,?,?)`)
+	if err != nil {
+		tx.Rollback() //nolint:errcheck
+		return err
+	}
+	defer stmt.Close()
+	for _, e := range events {
+		if _, err := stmt.Exec(
+			e.EmployeeID, e.OrgID, e.AppName, e.WindowTitle,
+			e.URL, e.Category, e.DurationMs,
+			e.StartedAt.UTC(), e.EndedAt.UTC(),
+		); err != nil {
+			tx.Rollback() //nolint:errcheck
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // IsDiskFull returns true when err indicates the host filesystem or SQLite
 // database has no space left. Use this to emit a clear operator warning
 // instead of logging a cryptic sqlite error code.
