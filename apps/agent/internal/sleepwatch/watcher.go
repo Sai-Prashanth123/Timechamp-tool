@@ -94,6 +94,22 @@ func (w *Watcher) Stop() {
 	})
 }
 
+// Done returns a channel that is closed when the watcher stops.
+// Use this to exit select loops over C after Stop() is called, since C
+// itself is never closed (to avoid spurious zero-value reads in selects).
+//
+//	for {
+//	    select {
+//	    case event := <-w.C:
+//	        // handle event
+//	    case <-w.Done():
+//	        return
+//	    }
+//	}
+func (w *Watcher) Done() <-chan struct{} {
+	return w.stopCh
+}
+
 // Signal injects an external OS power event (e.g. from platform-specific
 // power notification APIs). Resume passes through the debounce logic.
 // Suspend is emitted directly — it is the only way Suspend events are fired.

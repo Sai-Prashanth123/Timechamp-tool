@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -26,10 +27,11 @@ import (
 
 // App holds the Wails application state.
 type App struct {
-	ctx         context.Context
-	agentBinary []byte
+	ctx          context.Context
+	agentBinary  []byte
 	sleepWatcher *sleepwatch.Watcher // detects system resume events
 	wakeSignal   chan struct{}        // buffered(1) — signals monitorAgent to wake early
+	restartMu    sync.Mutex          // guards restartAgentIfNeeded against concurrent calls
 }
 
 // NewApp creates a new App instance.
@@ -201,16 +203,21 @@ func (a *App) isAgentRunning(dataDir string) bool {
 // handlePowerEvents listens for wall-clock-drift resume events and triggers
 // an immediate agent restart check, bypassing the monitorAgent backoff timer.
 func (a *App) handlePowerEvents() {
-	for event := range a.sleepWatcher.C {
-		if event.Type == sleepwatch.Resume {
-			log.Printf("[tray] system resumed after %v — checking agent",
-				event.Duration.Round(time.Second))
-			// Unblock monitorAgent immediately (non-blocking send).
-			select {
-			case a.wakeSignal <- struct{}{}:
-			default:
+	for {
+		select {
+		case event := <-a.sleepWatcher.C:
+			if event.Type == sleepwatch.Resume {
+				log.Printf("[tray] system resumed after %v — checking agent",
+					event.Duration.Round(time.Second))
+				// Unblock monitorAgent immediately (non-blocking send).
+				select {
+				case a.wakeSignal <- struct{}{}:
+				default:
+				}
+				go a.restartAgentIfNeeded()
 			}
-			go a.restartAgentIfNeeded()
+		case <-a.sleepWatcher.Done():
+			return // watcher stopped — exit cleanly
 		}
 	}
 }
@@ -241,6 +248,10 @@ func (a *App) monitorAgent() {
 				}
 			}
 			backoff = minBackoff
+			// restartAgentIfNeeded() already handles relaunch on wake.
+			// Reset the timer and continue so monitorAgent doesn't also launch.
+			timer.Reset(backoff)
+			continue
 		}
 
 		token, err := keychain.LoadToken()
@@ -270,7 +281,14 @@ func (a *App) monitorAgent() {
 // restartAgentIfNeeded is called immediately on resume. It checks the agent
 // health endpoint (3s timeout); if unhealthy, kills the stale process and
 // relaunches. This provides ≤10s recovery instead of the full backoff delay.
+// A TryLock guard prevents concurrent calls (e.g. rapid lid open/close) from
+// launching two agent processes simultaneously.
 func (a *App) restartAgentIfNeeded() {
+	if !a.restartMu.TryLock() {
+		return // another restart already in progress
+	}
+	defer a.restartMu.Unlock()
+
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Get("http://127.0.0.1:27183/health")
 	if err == nil {
