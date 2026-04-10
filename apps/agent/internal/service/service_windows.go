@@ -27,6 +27,7 @@ const (
 // power event callback. Buffer 4 to avoid blocking the service handler.
 // main.go reads this channel and forwards events to sleepwatch.Signal().
 // Only populated when running as a Windows Service (not when tray-launched).
+// WARNING: caller must drain this channel; buffer holds only 4 events before drops begin.
 var PowerEvents = make(chan string, 4)
 
 type windowsManager struct{}
