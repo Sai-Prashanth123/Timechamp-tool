@@ -36,11 +36,12 @@ type Client struct {
 	http        *http.Client
 	retryConfig RetryConfig // defaults to DefaultRetry; overridable in tests
 
-	mu           stdsync.Mutex
-	state        circuitState  // guarded by mu
-	failures     int           // guarded by mu
-	openedAt     time.Time     // guarded by mu
-	resetTimeout time.Duration // guarded by mu; doubles on half-open probe failure
+	mu            stdsync.Mutex
+	state         circuitState  // guarded by mu
+	failures      int           // guarded by mu
+	openedAt      time.Time     // guarded by mu
+	resetTimeout  time.Duration // guarded by mu; doubles on half-open probe failure
+	probeInFlight bool          // guarded by mu; true when a half-open probe is in progress
 
 	// pinnedCertSHA256 is the hex-encoded SHA-256 of the expected server certificate DER.
 	// Empty string disables pinning.
@@ -122,7 +123,11 @@ func (c *Client) IsAvailable() bool {
 		}
 		return false
 	case stateHalfOpen:
-		return true // probe in progress; allow it to complete
+		if c.probeInFlight {
+			return false // probe already in flight — block all other callers
+		}
+		c.probeInFlight = true
+		return true
 	}
 	return true
 }
@@ -315,6 +320,7 @@ func (c *Client) recordFailure() {
 	c.failures++
 	if c.state == stateHalfOpen {
 		// probe failed — double the timeout (cap at 1 hour)
+		c.probeInFlight = false
 		c.resetTimeout *= 2
 		if c.resetTimeout > time.Hour {
 			c.resetTimeout = time.Hour
@@ -335,6 +341,7 @@ func (c *Client) recordFailure() {
 func (c *Client) recordSuccess() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.probeInFlight = false
 	c.state = stateClosed
 	c.failures = 0
 	c.resetTimeout = circuitResetAfter // reset backoff
@@ -346,6 +353,7 @@ func (c *Client) recordSuccess() {
 func (c *Client) ResetCircuit() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.probeInFlight = false
 	c.state = stateClosed
 	c.failures = 0
 	c.resetTimeout = circuitResetAfter

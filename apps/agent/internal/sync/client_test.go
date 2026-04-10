@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -115,10 +116,10 @@ func TestCircuitBreakerConcurrency(t *testing.T) {
 }
 
 func TestCircuitBreakerHalfOpen(t *testing.T) {
-	attempts := 0
+	var attempts atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		attempts++
-		if attempts <= 3 {
+		n := int(attempts.Add(1))
+		if n <= 3 {
 			w.WriteHeader(http.StatusServiceUnavailable)
 		} else {
 			w.WriteHeader(http.StatusOK)
@@ -136,20 +137,33 @@ func TestCircuitBreakerHalfOpen(t *testing.T) {
 		MaxElapsedTime:  1 * time.Second,
 	}
 
+	// Trip circuit with 3 failures.
 	for range 3 {
 		_ = c.Post("/agent/sync/heartbeat", struct{}{})
 	}
-	if c.IsAvailable() {
+
+	// Verify circuit is open.
+	c.mu.Lock()
+	if c.state != stateOpen {
+		c.mu.Unlock()
 		t.Fatal("circuit should be open after 3 failures")
 	}
+	c.mu.Unlock()
 
+	// Wait for reset timeout → half-open on next IsAvailable call.
 	time.Sleep(100 * time.Millisecond)
-	if !c.IsAvailable() {
-		t.Fatal("circuit should be half-open after reset timeout")
+
+	// Send one probe — internally IsAvailable transitions to half-open, probe succeeds, recordSuccess closes circuit.
+	if err := c.Post("/agent/sync/heartbeat", struct{}{}); err != nil {
+		t.Fatalf("probe post failed: %v", err)
 	}
 
-	_ = c.Post("/agent/sync/heartbeat", struct{}{})
-	if !c.IsAvailable() {
-		t.Fatal("circuit should be closed after successful probe")
+	// Verify circuit is closed.
+	c.mu.Lock()
+	if c.state != stateClosed {
+		st := c.state
+		c.mu.Unlock()
+		t.Fatalf("circuit should be closed after successful probe, got state=%d", st)
 	}
+	c.mu.Unlock()
 }
