@@ -43,9 +43,12 @@ func TestWatcher_DetectsWakeViaWallClockDrift(t *testing.T) {
 func TestWatcher_NoFalsePositiveUnderLoad(t *testing.T) {
 	t.Parallel()
 
+	var mu sync.Mutex
 	base := time.Now()
 	callCount := 0
 	mockNow := func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
 		callCount++
 		return base.Add(time.Duration(callCount) * 50 * time.Millisecond)
 	}
@@ -111,16 +114,25 @@ func TestWatcher_StopPreventsEvents(t *testing.T) {
 
 	w := newWatcher(time.Now, 50*time.Millisecond, 100*time.Millisecond)
 	w.Start()
+	// Give goroutine time to start, then stop it
+	time.Sleep(20 * time.Millisecond)
 	w.Stop()
 
-	w.Signal(Resume)
-	select {
-	case <-w.C:
+	// Drain any events that arrived before Stop
+	for {
 		select {
 		case <-w.C:
-			t.Fatal("received second event after Stop")
-		case <-time.After(200 * time.Millisecond):
+		default:
+			goto drained
 		}
+	}
+drained:
+	// After draining, no further events should arrive
+	w.Signal(Resume) // sigCh buffered but goroutine is stopped, so nothing reads it
+	select {
+	case evt := <-w.C:
+		t.Fatalf("received event after Stop: type=%q", evt.Type)
 	case <-time.After(200 * time.Millisecond):
+		// Correct — no events
 	}
 }

@@ -1,7 +1,10 @@
-// Package sleepwatch detects system suspend/resume events by comparing
-// wall-clock time against the poll interval. When the machine sleeps, the
-// monotonic clock pauses but the wall clock jumps — so a large gap between
-// wall-clock readings indicates a wake event.
+// Package sleepwatch detects system resume events by comparing wall-clock time
+// against the poll interval. When the machine sleeps, the monotonic clock
+// pauses but the wall clock jumps — so a large gap between wall-clock readings
+// indicates a wake event.
+//
+// Note: Suspend events cannot be auto-detected (the process is frozen before
+// sleep). Suspend events are only emitted when injected via Signal(Suspend).
 package sleepwatch
 
 import (
@@ -13,6 +16,8 @@ import (
 type EventType string
 
 const (
+	// Suspend is only emitted when injected via Signal(Suspend).
+	// The drift detector cannot fire before sleep because the process is frozen.
 	Suspend EventType = "suspend"
 	Resume  EventType = "resume"
 )
@@ -24,8 +29,8 @@ type Event struct {
 	Duration time.Duration
 }
 
-// debounceWindow is how long to suppress duplicate Resume events.
-const debounceWindow = 3 * time.Second
+// defaultDebounce is how long to suppress duplicate Resume events.
+const defaultDebounce = 3 * time.Second
 
 // Watcher monitors for system sleep/wake by watching wall-clock drift.
 type Watcher struct {
@@ -35,12 +40,13 @@ type Watcher struct {
 	nowFn     func() time.Time
 	poll      time.Duration
 	threshold time.Duration
+	debounce  time.Duration
 
-	ch      chan Event
-	stopCh  chan struct{}
-	sigCh   chan EventType
-	startMu sync.Mutex
-	started bool
+	ch       chan Event
+	stopCh   chan struct{}
+	sigCh    chan EventType
+	startMu  sync.Mutex
+	started  bool
 	stopOnce sync.Once
 
 	mu           sync.Mutex
@@ -63,6 +69,7 @@ func newWatcher(nowFn func() time.Time, poll, threshold time.Duration) *Watcher 
 		nowFn:     nowFn,
 		poll:      poll,
 		threshold: threshold,
+		debounce:  defaultDebounce,
 		stopCh:    make(chan struct{}),
 		sigCh:     make(chan EventType, 8),
 	}
@@ -88,7 +95,8 @@ func (w *Watcher) Stop() {
 }
 
 // Signal injects an external OS power event (e.g. from platform-specific
-// power notification APIs). The event passes through the debounce logic.
+// power notification APIs). Resume passes through the debounce logic.
+// Suspend is emitted directly — it is the only way Suspend events are fired.
 func (w *Watcher) Signal(t EventType) {
 	select {
 	case w.sigCh <- t:
@@ -110,8 +118,11 @@ func (w *Watcher) run() {
 			return
 
 		case evtType := <-w.sigCh:
-			if evtType == Resume {
+			switch evtType {
+			case Resume:
 				w.emitResume(0)
+			case Suspend:
+				w.emit(Event{Type: Suspend, At: w.nowFn()})
 			}
 
 		case <-ticker.C:
@@ -127,23 +138,26 @@ func (w *Watcher) run() {
 	}
 }
 
+// emit sends an event non-blocking — drops if consumer is too slow.
+func (w *Watcher) emit(evt Event) {
+	select {
+	case w.ch <- evt:
+	default:
+	}
+}
+
 // emitResume fires a Resume event, subject to the debounce window.
 func (w *Watcher) emitResume(gap time.Duration) {
+	now := w.nowFn().Round(0)
 	w.mu.Lock()
-	if !w.lastResumeAt.IsZero() && time.Since(w.lastResumeAt) < debounceWindow {
+	if !w.lastResumeAt.IsZero() && now.Sub(w.lastResumeAt) < w.debounce {
 		w.mu.Unlock()
 		return
 	}
-	w.lastResumeAt = time.Now()
+	w.lastResumeAt = now
 	w.mu.Unlock()
 
-	evt := Event{
-		Type:     Resume,
-		At:       time.Now(),
-		Duration: gap,
-	}
-
-	// Non-blocking send — drop if consumer is too slow.
+	evt := Event{Type: Resume, At: now, Duration: gap}
 	select {
 	case w.ch <- evt:
 	default:
