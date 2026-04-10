@@ -1,6 +1,7 @@
 package capture
 
 import (
+	"log"
 	"sync/atomic"
 )
 
@@ -10,8 +11,8 @@ import (
 // Atomic int64, stores seconds.
 var idleBaselineOffset int64
 
-// idleSecondsFunc is the OS-specific idle implementation, indirected through a
-// function variable so tests can replace it without build-tag gymnastics.
+// idleSecondsFunc is the injectable idle-time query — overridden in tests.
+// Tests must NOT run in parallel (no t.Parallel()) because they overwrite this variable.
 var idleSecondsFunc = idleSeconds
 
 // ResetIdleBaseline records the current raw idle at system wake time.
@@ -21,6 +22,7 @@ var idleSecondsFunc = idleSeconds
 func ResetIdleBaseline() {
 	raw, err := idleSecondsFunc()
 	if err != nil {
+		log.Printf("sleepwatch: ResetIdleBaseline: could not read idle time: %v; sleep duration may inflate idle counter", err)
 		return
 	}
 	atomic.StoreInt64(&idleBaselineOffset, int64(raw))

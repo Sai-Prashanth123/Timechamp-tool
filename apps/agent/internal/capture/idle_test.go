@@ -1,6 +1,7 @@
 package capture
 
 import (
+	"errors"
 	"sync/atomic"
 	"testing"
 )
@@ -70,5 +71,18 @@ func TestIdleSeconds_BaselineAutoClearsWhenUserActive(t *testing.T) {
 	got, _ = IdleSeconds()
 	if got != 30 {
 		t.Errorf("expected 30 after baseline cleared, got %d", got)
+	}
+}
+
+func TestResetIdleBaseline_ErrorIsNoop(t *testing.T) {
+	resetBaseline()
+	orig := idleSecondsFunc
+	defer func() { idleSecondsFunc = orig }()
+
+	idleSecondsFunc = func() (int, error) { return 0, errors.New("os error") }
+	ResetIdleBaseline()
+
+	if atomic.LoadInt64(&idleBaselineOffset) != 0 {
+		t.Error("expected baseline to remain 0 on idle query error")
 	}
 }
