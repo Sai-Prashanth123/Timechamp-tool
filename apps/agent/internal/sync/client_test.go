@@ -48,11 +48,14 @@ func TestPostBestEffort_DoesNotTripCircuit(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "tok")
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		c.PostBestEffort("/test", struct{}{})
 	}
 
 	if c.circuitOpen {
 		t.Error("PostBestEffort must not trip the circuit breaker")
+	}
+	if c.failures != 0 {
+		t.Errorf("PostBestEffort must not increment failure counter, got failures=%d", c.failures)
 	}
 }
