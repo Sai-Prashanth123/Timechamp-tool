@@ -15,9 +15,6 @@ import (
 var (
 	ntdll                    = windows.NewLazySystemDLL("ntdll.dll")
 	ntQuerySystemInformation = ntdll.NewProc("NtQuerySystemInformation")
-
-	psapiDll             = windows.NewLazySystemDLL("psapi.dll")
-	getProcessMemoryInfo = psapiDll.NewProc("GetProcessMemoryInfo")
 )
 
 // MEMORYSTATUSEX from GlobalMemoryStatusEx.
@@ -55,7 +52,7 @@ type systemProcessorPerfInfo struct {
 	_          [2]int64 // reserved
 }
 
-type metricsCollector struct {
+type MetricsCollector struct {
 	mu        sync.Mutex
 	lastIdle  int64
 	lastTotal int64
@@ -66,15 +63,15 @@ type metricsCollector struct {
 	sampleN int
 }
 
-var defaultCollector = &metricsCollector{}
+var defaultCollector = &MetricsCollector{}
 
-func (c *metricsCollector) fallback() SystemMetrics {
+func (c *MetricsCollector) fallback() SystemMetrics {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.lastValid
 }
 
-func (c *metricsCollector) collect() (SystemMetrics, error) {
+func (c *MetricsCollector) collect() (SystemMetrics, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -83,8 +80,7 @@ func (c *metricsCollector) collect() (SystemMetrics, error) {
 	// ---- Physical memory ----
 	var ms memoryStatusEx
 	ms.dwLength = uint32(unsafe.Sizeof(ms))
-	proc := windows.NewLazySystemDLL("kernel32.dll").NewProc("GlobalMemoryStatusEx")
-	proc.Call(uintptr(unsafe.Pointer(&ms)))
+	globalMemoryStatusEx.Call(uintptr(unsafe.Pointer(&ms)))
 	m.MemTotalMB = ms.ullTotalPhys / (1024 * 1024)
 	m.MemUsedMB = (ms.ullTotalPhys - ms.ullAvailPhys) / (1024 * 1024)
 
@@ -139,8 +135,8 @@ func getSystemMetrics() (SystemMetrics, error) {
 	return defaultCollector.collect()
 }
 
-// DefaultCollector returns the package-level metricsCollector for use by
+// DefaultCollector returns the package-level MetricsCollector for use by
 // the main event loop (Task 5: 4-sample amortization).
-func DefaultCollector() *metricsCollector {
+func DefaultCollector() *MetricsCollector {
 	return defaultCollector
 }

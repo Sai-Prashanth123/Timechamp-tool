@@ -33,12 +33,14 @@ var (
 // ── kernel32.dll ──────────────────────────────────────────────────────────────
 
 var (
-	getTickCount64Proc          = kernel32.NewProc("GetTickCount64")
-	queryFullProcessImageName   = kernel32.NewProc("QueryFullProcessImageNameW")
+	getTickCount64Proc        = kernel32.NewProc("GetTickCount64")
+	queryFullProcessImageName = kernel32.NewProc("QueryFullProcessImageNameW")
+	globalMemoryStatusEx      = kernel32.NewProc("GlobalMemoryStatusEx")
 )
 
 // ── psapi.dll ─────────────────────────────────────────────────────────────────
 
 var (
 	getModuleFileNameExProc = psapi.NewProc("GetModuleFileNameExW")
+	getProcessMemoryInfo    = psapi.NewProc("GetProcessMemoryInfo")
 )

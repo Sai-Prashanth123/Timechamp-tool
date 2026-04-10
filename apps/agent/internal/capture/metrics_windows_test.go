@@ -5,7 +5,7 @@ package capture
 import "testing"
 
 func TestMetricsSyscallFailure(t *testing.T) {
-	c := &metricsCollector{}
+	c := &MetricsCollector{}
 	c.lastValid = SystemMetrics{CPUPercent: 42.0, MemUsedMB: 1024, MemTotalMB: 8192}
 
 	result := c.fallback()
