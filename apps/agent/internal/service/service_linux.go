@@ -36,13 +36,31 @@ type linuxManager struct{}
 
 func newManager() Manager { return &linuxManager{} }
 
+// userHome returns the user home directory with defensive fallbacks, mirroring
+// the darwin implementation. Returns /tmp as a last resort so paths are never
+// relative (which would silently write files to the process working directory).
+func userHome() string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return home
+	}
+	// HOME may be unset in minimal environments; try common Linux paths.
+	for _, candidate := range []string{"/home/" + os.Getenv("USER"), "/root"} {
+		if candidate != "/home/" {
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate
+			}
+		}
+	}
+	return "/tmp"
+}
+
 // unitPath returns the path to the user systemd service unit file.
+// Respects $XDG_CONFIG_HOME per the XDG Base Directory Specification.
 func unitPath() string {
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
 		return filepath.Join(xdg, "systemd", "user", systemdServiceName+".service")
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "systemd", "user", systemdServiceName+".service")
+	return filepath.Join(userHome(), ".config", "systemd", "user", systemdServiceName+".service")
 }
 
 // Install writes the systemd user unit and enables + starts it.
@@ -52,8 +70,10 @@ func (m *linuxManager) Install(binaryPath string) error {
 		return err
 	}
 
-	dir := filepath.Dir(unitPath())
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	// Capture path once to avoid repeated env lookups.
+	path := unitPath()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("create systemd user dir: %w", err)
 	}
 
@@ -63,7 +83,7 @@ func (m *linuxManager) Install(binaryPath string) error {
 		return err
 	}
 
-	f, err := os.OpenFile(unitPath(), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		return fmt.Errorf("write unit file: %w", err)
 	}
@@ -81,7 +101,7 @@ func (m *linuxManager) Install(binaryPath string) error {
 		return fmt.Errorf("systemctl enable: %w — %s", err, out)
 	}
 
-	fmt.Printf("systemd user service installed at %s\n", unitPath())
+	fmt.Printf("systemd user service installed at %s\n", path)
 	return nil
 }
 
