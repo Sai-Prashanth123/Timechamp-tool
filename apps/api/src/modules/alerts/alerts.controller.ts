@@ -27,11 +27,13 @@ import {
   IsOptional,
   IsBoolean,
   IsInt,
+  IsEnum,
   MaxLength,
   Min,
   Max,
 } from 'class-validator';
 import { AlertsService } from './alerts.service';
+import { AlertType } from '../../database/entities/alert-rule.entity';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -45,8 +47,8 @@ export class CreateAlertRuleDto {
   @MaxLength(255)
   name: string;
 
-  @IsString()
-  type: string;
+  @IsEnum(AlertType)
+  type: AlertType;
 
   @IsOptional()
   @IsInt()
@@ -74,8 +76,8 @@ export class UpdateAlertRuleDto {
   name?: string;
 
   @IsOptional()
-  @IsString()
-  type?: string;
+  @IsEnum(AlertType)
+  type?: AlertType;
 
   @IsOptional()
   @IsInt()
@@ -118,13 +120,7 @@ export class AlertsController {
   @Roles(UserRole.ADMIN)
   @ApiOperation({ summary: 'Create an alert rule (admin only)' })
   createRule(@CurrentUser() user: User, @Body() dto: CreateAlertRuleDto) {
-    return this.service.createRule(user.organizationId, {
-      name: dto.name,
-      type: dto.type,
-      threshold: dto.threshold ?? 30,
-      notifyEmail: dto.notifyEmail,
-      notifyInApp: dto.notifyInApp,
-    });
+    return this.service.createRule(user.organizationId, dto);
   }
 
   @Patch('rules/:id')
@@ -135,13 +131,7 @@ export class AlertsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateAlertRuleDto,
   ) {
-    return this.service.updateRule(id, {
-      name: dto.name,
-      threshold: dto.threshold,
-      enabled: dto.enabled,
-      notifyEmail: dto.notifyEmail,
-      notifyInApp: dto.notifyInApp,
-    });
+    return this.service.updateRule(id, user.organizationId, dto);
   }
 
   @Delete('rules/:id')
@@ -152,7 +142,7 @@ export class AlertsController {
     @CurrentUser() user: User,
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<void> {
-    await this.service.deleteRule(id);
+    await this.service.deleteRule(id, user.organizationId);
   }
 
   // ── Events ─────────────────────────────────────────────────────────
@@ -160,23 +150,27 @@ export class AlertsController {
   // to avoid NestJS treating 'unread-count' as an :id param.
 
   @Get('events/unread-count')
-  @ApiOperation({ summary: 'Count of unseen alert events for the current user' })
+  @ApiOperation({ summary: 'Count of unseen alert events for the current user (badge)' })
   async getUnreadCount(@CurrentUser() user: User): Promise<{ count: number }> {
     const count = await this.service.getUnreadCount(user.organizationId, user.id);
     return { count };
   }
 
   @Get('events')
-  @ApiOperation({ summary: 'List alert events' })
+  @ApiOperation({ summary: 'List alert events. Employees see own only; managers can pass ?userId= filter.' })
   @ApiQuery({ name: 'userId', required: false })
-  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'limit',  required: false, type: Number })
   listEvents(
     @CurrentUser() user: User,
     @Query('userId') userId?: string,
     @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit?: number,
   ) {
-    const isManager = user.role === UserRole.ADMIN || user.role === UserRole.MANAGER;
+    const isManager =
+      user.role === UserRole.ADMIN || user.role === UserRole.MANAGER;
+
+    // Employees can only see their own events
     const effectiveUserId = isManager ? userId : user.id;
+
     return this.service.getEvents(user.organizationId, effectiveUserId, limit);
   }
 
@@ -185,17 +179,25 @@ export class AlertsController {
   async markSeen(
     @CurrentUser() user: User,
     @Param('id', ParseUUIDPipe) id: string,
-  ): Promise<void> {
-    await this.service.markSeen(id);
+  ) {
+    const event = await this.service.markSeen(id, user.organizationId);
+    // Guard: employees cannot mark other users' events
+    if (
+      user.role === UserRole.EMPLOYEE &&
+      event.userId !== user.id
+    ) {
+      throw new ForbiddenException("Cannot mark another user's alert as seen");
+    }
+    return event;
   }
 
   @Post('events/:id/acknowledge')
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
-  @ApiOperation({ summary: 'Acknowledge an alert event (manager/admin)' })
-  async acknowledgeEvent(
+  @ApiOperation({ summary: 'Acknowledge an alert event (manager/admin, legacy)' })
+  acknowledgeEvent(
     @CurrentUser() user: User,
     @Param('id', ParseUUIDPipe) id: string,
-  ): Promise<void> {
-    await this.service.markSeen(id);
+  ) {
+    return this.service.markSeen(id, user.organizationId);
   }
 }
