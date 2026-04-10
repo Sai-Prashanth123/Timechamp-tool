@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -88,5 +89,38 @@ func TestUploader_FlushActivity_ServerError_RetainsBuffer(t *testing.T) {
 	remaining, _ := db.ListUnsyncedActivity(100)
 	if len(remaining) != 1 {
 		t.Errorf("expected 1 retained record on error, got %d", len(remaining))
+	}
+}
+
+func TestScreenshotSkipsMissingFile(t *testing.T) {
+	dir := t.TempDir()
+	db, err := buffer.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// Insert a record pointing to a file that does not exist.
+	if err := db.InsertScreenshot(buffer.ScreenshotRecord{
+		EmployeeID: "emp1",
+		OrgID:      "org1",
+		LocalPath:  filepath.Join(dir, "nonexistent.jpg"),
+		CapturedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("InsertScreenshot: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("API should not be called for a missing file")
+	}))
+	defer srv.Close()
+
+	u := agentsync.NewUploader(agentsync.NewClient(srv.URL, "tok"), db)
+	n, err := u.FlushScreenshots()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("expected 1 discarded, got %d", n)
 	}
 }

@@ -208,6 +208,16 @@ func (u *Uploader) FlushScreenshots() (int, error) {
 
 	flushed := 0
 	for _, r := range records {
+		// Orphan guard: discard the record if the local file no longer exists.
+		// This can happen when the screenshot was deleted externally (e.g. OS temp
+		// cleanup, disk-full recovery, or a crash mid-capture).
+		if _, statErr := os.Stat(r.LocalPath); os.IsNotExist(statErr) {
+			log.Printf("[uploader] screenshot file missing — discarding record id=%d path=%s", r.ID, r.LocalPath)
+			_ = u.db.MarkScreenshotSynced(r.ID, "discarded")
+			flushed++
+			continue
+		}
+
 		filename := filepath.Base(r.LocalPath)
 
 		err := WithRetry(screenshotRetry, func() (permanent bool, err error) {
