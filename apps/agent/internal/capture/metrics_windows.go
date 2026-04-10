@@ -3,7 +3,9 @@
 package capture
 
 import (
+	"log"
 	"runtime"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -14,8 +16,8 @@ var (
 	ntdll                    = windows.NewLazySystemDLL("ntdll.dll")
 	ntQuerySystemInformation = ntdll.NewProc("NtQuerySystemInformation")
 
-	psapiDll              = windows.NewLazySystemDLL("psapi.dll")
-	getProcessMemoryInfo  = psapiDll.NewProc("GetProcessMemoryInfo")
+	psapiDll             = windows.NewLazySystemDLL("psapi.dll")
+	getProcessMemoryInfo = psapiDll.NewProc("GetProcessMemoryInfo")
 )
 
 // MEMORYSTATUSEX from GlobalMemoryStatusEx.
@@ -47,19 +49,35 @@ type processMemoryCounters struct {
 
 // systemProcessorPerformanceInformation for NtQuerySystemInformation(8)
 type systemProcessorPerfInfo struct {
-	idleTime       int64
-	kernelTime     int64
-	userTime       int64
-	_              [2]int64 // reserved
+	idleTime   int64
+	kernelTime int64
+	userTime   int64
+	_          [2]int64 // reserved
 }
 
-// cpuState tracks the previous sample for delta calculation.
-var cpuState struct {
-	lastIdle, lastTotal int64
-	lastRead            time.Time
+type metricsCollector struct {
+	mu        sync.Mutex
+	lastIdle  int64
+	lastTotal int64
+	lastRead  time.Time
+	lastValid SystemMetrics
+	// 4-sample ring buffer for amortization (Task 5)
+	samples [4]SystemMetrics
+	sampleN int
 }
 
-func getSystemMetrics() (SystemMetrics, error) {
+var defaultCollector = &metricsCollector{}
+
+func (c *metricsCollector) fallback() SystemMetrics {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.lastValid
+}
+
+func (c *metricsCollector) collect() (SystemMetrics, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	var m SystemMetrics
 
 	// ---- Physical memory ----
@@ -75,12 +93,16 @@ func getSystemMetrics() (SystemMetrics, error) {
 	buf := make([]systemProcessorPerfInfo, numCPU)
 	size := uintptr(numCPU) * unsafe.Sizeof(buf[0])
 	var retLen uint32
-	ntQuerySystemInformation.Call(
-		8, // SystemProcessorPerformanceInformation
+	ret, _, _ := ntQuerySystemInformation.Call(
+		8,
 		uintptr(unsafe.Pointer(&buf[0])),
 		size,
 		uintptr(unsafe.Pointer(&retLen)),
 	)
+	if ret != 0 {
+		log.Printf("[metrics] NtQuerySystemInformation NTSTATUS=0x%X — returning last valid", ret)
+		return c.lastValid, nil
+	}
 
 	var totalIdle, totalKernel, totalUser int64
 	for _, info := range buf {
@@ -89,18 +111,16 @@ func getSystemMetrics() (SystemMetrics, error) {
 		totalUser += info.userTime
 	}
 	totalActive := totalKernel + totalUser
-	totalBusy := totalActive - totalIdle
 
-	if cpuState.lastTotal > 0 {
-		deltaTotal := totalActive - cpuState.lastTotal
-		deltaIdle := totalIdle - cpuState.lastIdle
+	if c.lastTotal > 0 {
+		deltaTotal := totalActive - c.lastTotal
+		deltaIdle := totalIdle - c.lastIdle
 		if deltaTotal > 0 {
 			m.CPUPercent = float64(deltaTotal-deltaIdle) / float64(deltaTotal) * 100.0
 		}
 	}
-	cpuState.lastIdle = totalIdle
-	cpuState.lastTotal = totalActive
-	_ = totalBusy
+	c.lastIdle = totalIdle
+	c.lastTotal = totalActive
 
 	// ---- Agent process memory ----
 	proc2, err := windows.GetCurrentProcess()
@@ -111,5 +131,16 @@ func getSystemMetrics() (SystemMetrics, error) {
 		m.AgentMemMB = uint64(pmc.workingSetSize) / (1024 * 1024)
 	}
 
+	c.lastValid = m
 	return m, nil
+}
+
+func getSystemMetrics() (SystemMetrics, error) {
+	return defaultCollector.collect()
+}
+
+// DefaultCollector returns the package-level metricsCollector for use by
+// the main event loop (Task 5: 4-sample amortization).
+func DefaultCollector() *metricsCollector {
+	return defaultCollector
 }
