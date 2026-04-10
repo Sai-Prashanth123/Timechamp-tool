@@ -75,6 +75,25 @@ func (r *Reporter) Recover() {
 	panic(v) // re-panic so other deferred cleanup still runs
 }
 
+// ReportGoroutinePanic sends a crash report for a panic caught in a background
+// goroutine. Non-blocking best-effort: fires in a new goroutine so it never
+// stalls the caller or shutdown.
+func (r *Reporter) ReportGoroutinePanic(goroutineName string, value any, stack []byte) {
+	report := CrashReport{
+		AgentVersion: r.version,
+		OS:           runtime.GOOS,
+		Arch:         runtime.GOARCH,
+		OrgID:        r.orgID,
+		EmployeeID:   r.employeeID,
+		ErrorType:    "goroutine_panic",
+		Message:      fmt.Sprintf("[%s] %v", goroutineName, value),
+		StackTrace:   string(stack),
+		UptimeSec:    int64(time.Since(r.startedAt).Seconds()),
+		ReportedAt:   time.Now().UTC(),
+	}
+	go r.send(report)
+}
+
 func (r *Reporter) send(report CrashReport) {
 	body, err := json.Marshal(report)
 	if err != nil {

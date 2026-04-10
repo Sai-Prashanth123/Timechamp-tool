@@ -191,11 +191,11 @@ func run() {
 
 	// Browser extension URL relay listener.
 	urlCache.Store("")
-	safeGo("listenBrowserURLs", listenBrowserURLs)
+	safeGo("listenBrowserURLs", crashReporter, listenBrowserURLs)
 
 	// Auto-update checker (hourly, skipped in dev builds).
 	if Version != "dev" {
-		safeGo("auto-updater", func() {
+		safeGo("auto-updater", crashReporter, func() {
 			ticker := time.NewTicker(1 * time.Hour)
 			defer ticker.Stop()
 			for range ticker.C {
@@ -272,7 +272,7 @@ func run() {
 
 	// Check permissions at startup and re-check every 60s (macOS only — no-op on other platforms).
 	capture.CheckAndRequestPermissions()
-	safeGo("permission-checker", func() {
+	safeGo("permission-checker", crashReporter, func() {
 		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
@@ -287,7 +287,7 @@ func run() {
 
 	// Wire Windows SCM power events → sleepwatch (Windows Service mode only).
 	// service.PowerEvents is only defined on Windows; use the platform relay helper.
-	forwardPowerEvents(sleepWatcher)
+	forwardPowerEvents(sleepWatcher, crashReporter)
 
 	log.Printf("Agent started. Screenshot every %ds, sync every %ds, idle threshold %ds",
 		cfg.ScreenshotInterval, cfg.SyncInterval, cfg.IdleThreshold)
@@ -361,225 +361,245 @@ func run() {
 
 		// ── Sleep / resume ─────────────────────────────────────────────────────
 		case event := <-sleepWatcher.C:
-			switch event.Type {
-			case sleepwatch.Suspend:
-				log.Printf("[sleep] system going to sleep — flushing buffers")
-				hq.FlushAll()
-				_ = db.Checkpoint()
-			case sleepwatch.Resume:
-				log.Printf("[sleep] system resumed after %v", event.Duration.Round(time.Second))
-				isAFK = false
-				hq.FlushAll()
-				capture.ResetIdleBaseline()
-				go func() {
-					client.ResetCircuit()
-					// PostBestEffort: single attempt, no retry, bounded by HTTP timeout.
-					// Avoids blocking for minutes if the network isn't up yet post-wake.
-					client.PostBestEffort("/agent/sync/heartbeat", struct{}{})
-					_, _ = uploader.FlushActivity()
-					_, _ = uploader.FlushScreenshots()
-					_, _ = uploader.FlushMetrics()
-				}()
-				syncTicker.Reset(5 * time.Second)
-			}
+			withRecover("sleep-event", crashReporter, func() {
+				switch event.Type {
+				case sleepwatch.Suspend:
+					log.Printf("[sleep] system going to sleep — flushing buffers")
+					hq.FlushAll()
+					_ = db.Checkpoint()
+				case sleepwatch.Resume:
+					log.Printf("[sleep] system resumed after %v", event.Duration.Round(time.Second))
+					isAFK = false
+					hq.FlushAll()
+					capture.ResetIdleBaseline()
+					go func() {
+						client.ResetCircuit()
+						// PostBestEffort: single attempt, no retry, bounded by HTTP timeout.
+						// Avoids blocking for minutes if the network isn't up yet post-wake.
+						client.PostBestEffort("/agent/sync/heartbeat", struct{}{})
+						_, _ = uploader.FlushActivity()
+						_, _ = uploader.FlushScreenshots()
+						_, _ = uploader.FlushMetrics()
+					}()
+					syncTicker.Reset(5 * time.Second)
+				}
+			})
 
 		// ── Window poll (1 second) ─────────────────────────────────────────────
 		case t := <-windowTicker.C:
-			idleSec, _ := capture.IdleSeconds()
-			idleDur := time.Duration(idleSec) * time.Second
+			withRecover("window-poll", crashReporter, func() {
+				idleSec, _ := capture.IdleSeconds()
+				idleDur := time.Duration(idleSec) * time.Second
 
-			// ── AFK state machine (ActivityWatch pattern) ────────────────────
-			if !isAFK && idleDur >= afkThreshold {
-				// ACTIVE → AFK transition
-				// Flush current window session immediately on going AFK.
-				hq.FlushAll()
-				isAFK = true
-				log.Printf("[afk] user idle for %s — pausing tracking", idleDur.Round(time.Second))
-			} else if isAFK && idleDur < afkThreshold {
-				// AFK → ACTIVE transition
-				isAFK = false
-				log.Printf("[afk] user returned after %s idle", idleDur.Round(time.Second))
-			}
+				// ── AFK state machine (ActivityWatch pattern) ────────────────────
+				if !isAFK && idleDur >= afkThreshold {
+					// ACTIVE → AFK transition
+					// Flush current window session immediately on going AFK.
+					hq.FlushAll()
+					isAFK = true
+					log.Printf("[afk] user idle for %s — pausing tracking", idleDur.Round(time.Second))
+				} else if isAFK && idleDur < afkThreshold {
+					// AFK → ACTIVE transition
+					isAFK = false
+					log.Printf("[afk] user returned after %s idle", idleDur.Round(time.Second))
+				}
 
-			if isAFK {
-				continue
-			}
+				if isAFK {
+					return // was: continue
+				}
 
-			// ── Window tracking ───────────────────────────────────────────────
-			win, err := capture.GetActiveWindow()
-			if err != nil || win.AppName == "" {
-				continue
-			}
+				// ── Window tracking ───────────────────────────────────────────────
+				win, err := capture.GetActiveWindow()
+				if err != nil || win.AppName == "" {
+					return // was: continue
+				}
 
-			// Resolve URL via 3-layer detection: extension cache → native → title parsing.
-			extURL := urlCache.Load().(string)
-			url := capture.ResolveURL(win, extURL)
+				// Resolve URL via 3-layer detection: extension cache → native → title parsing.
+				extURL := urlCache.Load().(string)
+				url := capture.ResolveURL(win, extURL)
 
-			// Classify app into a productivity category.
-			cat := classifier.Classify(win.AppName, win.WindowTitle, url, classifier.DefaultRules)
+				// Classify app into a productivity category.
+				cat := classifier.Classify(win.AppName, win.WindowTitle, url, classifier.DefaultRules)
 
-			// Feed into heartbeat queue for pre-merge.
-			hq.Push(windowStream, heartbeat.Event{
-				Timestamp: t,
-				Duration:  1 * time.Second,
-				Data: map[string]string{
-					"app":      win.AppName,
-					"title":    win.WindowTitle,
-					"url":      url,
-					"category": cat,
-				},
-			}, pulsetime)
+				// Feed into heartbeat queue for pre-merge.
+				hq.Push(windowStream, heartbeat.Event{
+					Timestamp: t,
+					Duration:  1 * time.Second,
+					Data: map[string]string{
+						"app":      win.AppName,
+						"title":    win.WindowTitle,
+						"url":      url,
+						"category": cat,
+					},
+				}, pulsetime)
+			})
 
 		// ── Screenshots ────────────────────────────────────────────────────────
 		case <-screenshotTicker.C:
-			// Skip if no screen recording permission (macOS) or user is idle.
-			if !capture.HasScreenRecording() {
-				continue
-			}
-			idleSec, _ := capture.IdleSeconds()
-			if time.Duration(idleSec)*time.Second >= afkThreshold {
-				continue
-			}
-
-			path, err := capture.CaptureScreenshot(screenshotsDir)
-			if err != nil {
-				log.Printf("Screenshot failed: %v", err)
-				continue
-			}
-			if err := db.InsertScreenshot(buffer.ScreenshotRecord{
-				EmployeeID: cfg.EmployeeID,
-				OrgID:      cfg.OrgID,
-				LocalPath:  path,
-				CapturedAt: time.Now(),
-			}); err != nil {
-				if buffer.IsDiskFull(err) {
-					log.Printf("CRITICAL: disk full — cannot store screenshot. Free disk space to resume recording.")
+			withRecover("screenshot-tick", crashReporter, func() {
+				// Skip if no screen recording permission (macOS) or user is idle.
+				if !capture.HasScreenRecording() {
+					return // was: continue
 				}
-			}
+				idleSec, _ := capture.IdleSeconds()
+				if time.Duration(idleSec)*time.Second >= afkThreshold {
+					return // was: continue
+				}
+
+				path, err := capture.CaptureScreenshot(screenshotsDir)
+				if err != nil {
+					log.Printf("Screenshot failed: %v", err)
+					return // was: continue
+				}
+				if err := db.InsertScreenshot(buffer.ScreenshotRecord{
+					EmployeeID: cfg.EmployeeID,
+					OrgID:      cfg.OrgID,
+					LocalPath:  path,
+					CapturedAt: time.Now(),
+				}); err != nil {
+					if buffer.IsDiskFull(err) {
+						log.Printf("CRITICAL: disk full — cannot store screenshot. Free disk space to resume recording.")
+					}
+				}
+			})
 
 		// ── Input counts ───────────────────────────────────────────────────────
 		case <-inputTicker.C:
-			keys, mouse := inputCounter.Drain()
-			if keys > 0 || mouse > 0 {
-				_ = db.InsertKeystroke(buffer.KeystrokeEvent{
-					EmployeeID:  cfg.EmployeeID,
-					OrgID:       cfg.OrgID,
-					KeysPerMin:  keys,
-					MousePerMin: mouse,
-					RecordedAt:  time.Now(),
-				})
-			}
+			withRecover("input-tick", crashReporter, func() {
+				keys, mouse := inputCounter.Drain()
+				if keys > 0 || mouse > 0 {
+					_ = db.InsertKeystroke(buffer.KeystrokeEvent{
+						EmployeeID:  cfg.EmployeeID,
+						OrgID:       cfg.OrgID,
+						KeysPerMin:  keys,
+						MousePerMin: mouse,
+						RecordedAt:  time.Now(),
+					})
+				}
+			})
 
 		// ── System metrics ─────────────────────────────────────────────────────
 		case <-metricsTicker.C:
-			m, err := capture.GetSystemMetrics()
-			if err != nil {
-				continue
-			}
-			if err := db.InsertMetrics(buffer.SystemMetricsEvent{
-				EmployeeID:      cfg.EmployeeID,
-				OrgID:           cfg.OrgID,
-				CPUPercent:      m.CPUPercent,
-				MemUsedMB:       m.MemUsedMB,
-				MemTotalMB:      m.MemTotalMB,
-				AgentCPUPercent: m.AgentCPUPercent,
-				AgentMemMB:      m.AgentMemMB,
-				RecordedAt:      time.Now(),
-			}); err != nil && buffer.IsDiskFull(err) {
-				log.Printf("CRITICAL: disk full — cannot write metrics to buffer.")
-			}
-			if m.AgentMemMB > 100 {
-				log.Printf("Warning: agent RAM %d MiB — check for memory leak", m.AgentMemMB)
-			}
+			withRecover("metrics-tick", crashReporter, func() {
+				m, err := capture.GetSystemMetrics()
+				if err != nil {
+					return // was: continue
+				}
+				if err := db.InsertMetrics(buffer.SystemMetricsEvent{
+					EmployeeID:      cfg.EmployeeID,
+					OrgID:           cfg.OrgID,
+					CPUPercent:      m.CPUPercent,
+					MemUsedMB:       m.MemUsedMB,
+					MemTotalMB:      m.MemTotalMB,
+					AgentCPUPercent: m.AgentCPUPercent,
+					AgentMemMB:      m.AgentMemMB,
+					RecordedAt:      time.Now(),
+				}); err != nil && buffer.IsDiskFull(err) {
+					log.Printf("CRITICAL: disk full — cannot write metrics to buffer.")
+				}
+				if m.AgentMemMB > 100 {
+					log.Printf("Warning: agent RAM %d MiB — check for memory leak", m.AgentMemMB)
+				}
+			})
 
 		// ── Sync flush ─────────────────────────────────────────────────────────
 		case <-syncTicker.C:
-			if !client.IsAvailable() {
-				continue
-			}
-			// Flush heartbeat queue to SQLite first.
-			hq.FlushAll()
+			withRecover("sync-tick", crashReporter, func() {
+				if !client.IsAvailable() {
+					return // was: continue
+				}
+				// Flush heartbeat queue to SQLite first.
+				hq.FlushAll()
 
-			syncStart := time.Now()
-			n1, err1 := uploader.FlushActivity()
-			n2, err2 := uploader.FlushKeystrokes()
-			n3, err3 := uploader.FlushScreenshots()
-			n4, err4 := uploader.FlushMetrics()
-			if err1 != nil || err2 != nil || err3 != nil || err4 != nil {
-				log.Printf("Sync errors: activity=%v keystrokes=%v screenshots=%v metrics=%v",
-					err1, err2, err3, err4)
-			} else if n1+n2+n3+n4 > 0 {
-				log.Printf("Synced: %d activity, %d keystrokes, %d screenshots, %d metrics",
-					n1, n2, n3, n4)
-			}
-			// Track telemetry state for the next self-report.
-			lastSyncLatencyMs = time.Since(syncStart).Milliseconds()
-			lastSyncSuccess = (err1 == nil && err2 == nil && err3 == nil && err4 == nil)
-			if !lastSyncSuccess {
-				syncErrorCount++
-			}
-			// Push live state to health endpoint so tray / monitoring see current health.
-			bufferedForHealth, _ := db.CountActivity()
-			healthSrv.SetMetrics(health.Metrics{
-				BufferDepth:        bufferedForHealth,
-				SyncHealthy:        lastSyncSuccess,
-				LastSyncAt:         time.Now(),
-				HasScreenRecording: capture.HasScreenRecording(),
-				HasAccessibility:   capture.HasAccessibility(),
-				URLDetectionLayer:  capture.URLDetectionLayer.Load(),
+				syncStart := time.Now()
+				n1, err1 := uploader.FlushActivity()
+				n2, err2 := uploader.FlushKeystrokes()
+				n3, err3 := uploader.FlushScreenshots()
+				n4, err4 := uploader.FlushMetrics()
+				if err1 != nil || err2 != nil || err3 != nil || err4 != nil {
+					log.Printf("Sync errors: activity=%v keystrokes=%v screenshots=%v metrics=%v",
+						err1, err2, err3, err4)
+				} else if n1+n2+n3+n4 > 0 {
+					log.Printf("Synced: %d activity, %d keystrokes, %d screenshots, %d metrics",
+						n1, n2, n3, n4)
+				}
+				// Track telemetry state for the next self-report.
+				lastSyncLatencyMs = time.Since(syncStart).Milliseconds()
+				lastSyncSuccess = (err1 == nil && err2 == nil && err3 == nil && err4 == nil)
+				if !lastSyncSuccess {
+					syncErrorCount++
+				}
+				// Push live state to health endpoint so tray / monitoring see current health.
+				bufferedForHealth, _ := db.CountActivity()
+				healthSrv.SetMetrics(health.Metrics{
+					BufferDepth:        bufferedForHealth,
+					SyncHealthy:        lastSyncSuccess,
+					LastSyncAt:         time.Now(),
+					HasScreenRecording: capture.HasScreenRecording(),
+					HasAccessibility:   capture.HasAccessibility(),
+					URLDetectionLayer:  capture.URLDetectionLayer.Load(),
+				})
 			})
 
 		// ── Heartbeat ──────────────────────────────────────────────────────────
 		case <-heartbeatTicker.C:
-			if client.IsAvailable() {
-				if err := client.Heartbeat(); err != nil {
-					log.Printf("Heartbeat failed: %v", err)
+			withRecover("heartbeat-tick", crashReporter, func() {
+				if client.IsAvailable() {
+					if err := client.Heartbeat(); err != nil {
+						log.Printf("Heartbeat failed: %v", err)
+					}
 				}
-			}
+			})
 
 		// ── Config hot-reload (every 5 min) ───────────────────────────────────
 		// Re-fetches screenshot interval from API; resets ticker if changed.
 		// This allows managers to adjust capture frequency without agent restart.
 		case <-configTicker.C:
-			if !client.IsAvailable() {
-				continue
-			}
-			newOrgCfg, err := client.FetchOrgConfig()
-			if err != nil || newOrgCfg == nil {
-				continue
-			}
-			if newOrgCfg.ScreenshotIntervalSec > 0 &&
-				newOrgCfg.ScreenshotIntervalSec != cfg.ScreenshotInterval {
-				cfg.ScreenshotInterval = newOrgCfg.ScreenshotIntervalSec
-				screenshotTicker.Reset(time.Duration(newOrgCfg.ScreenshotIntervalSec) * time.Second)
-				log.Printf("Config updated: screenshot interval → %ds", newOrgCfg.ScreenshotIntervalSec)
-			}
+			withRecover("config-reload", crashReporter, func() {
+				if !client.IsAvailable() {
+					return // was: continue
+				}
+				newOrgCfg, err := client.FetchOrgConfig()
+				if err != nil || newOrgCfg == nil {
+					return // was: continue
+				}
+				if newOrgCfg.ScreenshotIntervalSec > 0 &&
+					newOrgCfg.ScreenshotIntervalSec != cfg.ScreenshotInterval {
+					cfg.ScreenshotInterval = newOrgCfg.ScreenshotIntervalSec
+					screenshotTicker.Reset(time.Duration(newOrgCfg.ScreenshotIntervalSec) * time.Second)
+					log.Printf("Config updated: screenshot interval → %ds", newOrgCfg.ScreenshotIntervalSec)
+				}
+			})
 
 		// ── Daily prune + buffer cap + WAL checkpoint ─────────────────────────
 		case <-pruneTicker.C:
-			if err := db.PruneSynced(cfg.MaxBufferDays); err != nil {
-				log.Printf("Prune error: %v", err)
-			}
-			// Cap unsynced rows so the buffer can't grow unbounded during long
-			// offline periods (e.g. 7-day internet outage).
-			const maxBufferedRows = 10_000
-			if err := db.CapBuffer(maxBufferedRows); err != nil {
-				log.Printf("Buffer cap error: %v", err)
-			}
-			if err := db.Checkpoint(); err != nil {
-				log.Printf("WAL checkpoint error: %v", err)
-			}
+			withRecover("prune-tick", crashReporter, func() {
+				if err := db.PruneSynced(cfg.MaxBufferDays); err != nil {
+					log.Printf("Prune error: %v", err)
+				}
+				// Cap unsynced rows so the buffer can't grow unbounded during long
+				// offline periods (e.g. 7-day internet outage).
+				const maxBufferedRows = 10_000
+				if err := db.CapBuffer(maxBufferedRows); err != nil {
+					log.Printf("Buffer cap error: %v", err)
+				}
+				if err := db.Checkpoint(); err != nil {
+					log.Printf("WAL checkpoint error: %v", err)
+				}
+			})
 
 		// ── Agent telemetry ────────────────────────────────────────────────────
 		case <-telemetryTicker.C:
-			if !client.IsAvailable() {
-				continue
-			}
-			counts, _ := db.CountAll()
-			buffered := counts["activity"]
-			t := telemetryCollector.Collect(lastSyncSuccess, lastSyncLatencyMs, buffered, syncErrorCount)
-			syncErrorCount = 0 // reset after reporting
-			client.PostBestEffort("/agent/sync/telemetry", t)
+			withRecover("telemetry-tick", crashReporter, func() {
+				if !client.IsAvailable() {
+					return // was: continue
+				}
+				counts, _ := db.CountAll()
+				buffered := counts["activity"]
+				t := telemetryCollector.Collect(lastSyncSuccess, lastSyncLatencyMs, buffered, syncErrorCount)
+				syncErrorCount = 0 // reset after reporting
+				client.PostBestEffort("/agent/sync/telemetry", t)
+			})
 		}
 	}
 }
@@ -634,21 +654,38 @@ func osVersion() string {
 }
 
 // safeGo runs fn in a new goroutine with panic recovery.
-// On panic it logs the stack trace but does NOT re-panic — goroutine panics
-// cannot propagate to the main goroutine anyway, so we log and let the
-// goroutine exit cleanly. The main crash reporter handles panics in the
-// main event loop via defer crashReporter.Recover().
-func safeGo(name string, fn func()) {
+// On panic it logs the stack trace and reports to the crash API.
+// Does NOT re-panic — goroutine panics cannot propagate to main anyway.
+func safeGo(name string, cr *telemetry.Reporter, fn func()) {
 	go func() {
 		defer func() {
 			if v := recover(); v != nil {
-				buf := make([]byte, 8192)
+				buf := make([]byte, 16384)
 				n := runtime.Stack(buf, false)
 				log.Printf("PANIC in goroutine %s: %v\n%s", name, v, buf[:n])
+				if cr != nil {
+					cr.ReportGoroutinePanic(name, v, buf[:n])
+				}
 			}
 		}()
 		fn()
 	}()
+}
+
+// withRecover wraps fn so a panic inside it is caught, reported to the crash
+// API, and logged — but does NOT terminate the main event loop.
+func withRecover(name string, cr *telemetry.Reporter, fn func()) {
+	defer func() {
+		if v := recover(); v != nil {
+			buf := make([]byte, 16384)
+			n := runtime.Stack(buf, false)
+			log.Printf("PANIC in %s: %v\n%s", name, v, buf[:n])
+			if cr != nil {
+				cr.ReportGoroutinePanic(name, v, buf[:n])
+			}
+		}
+	}()
+	fn()
 }
 
 // updaterPublicKey is the ECDSA-P256 PEM public key for verifying update binaries.

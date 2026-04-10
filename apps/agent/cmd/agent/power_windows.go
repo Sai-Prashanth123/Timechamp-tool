@@ -7,13 +7,14 @@ import (
 
 	"github.com/timechamp/agent/internal/service"
 	"github.com/timechamp/agent/internal/sleepwatch"
+	"github.com/timechamp/agent/internal/telemetry"
 )
 
-func forwardPowerEvents(w *sleepwatch.Watcher) {
+func forwardPowerEvents(w *sleepwatch.Watcher, cr *telemetry.Reporter) {
 	if !service.IsWindowsService() {
 		return
 	}
-	safeGo("power-event-relay", func() {
+	safeGo("power-event-relay", cr, func() {
 		// range exits automatically when PowerEvents is closed (on service stop).
 		for evt := range service.PowerEvents {
 			switch sleepwatch.EventType(evt) {
