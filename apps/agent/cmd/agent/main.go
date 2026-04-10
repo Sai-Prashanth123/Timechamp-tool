@@ -145,7 +145,7 @@ func run() {
 			if saveErr := keychain.SaveToken(regToken); saveErr != nil {
 				log.Fatalf("Failed to save token: %v", saveErr)
 			}
-			if saveErr := config.SaveIdentity(cfg.DataDir, orgID, employeeID); saveErr != nil {
+			if saveErr := config.SaveIdentity(cfg.DataDir, orgID, employeeID, cfg.APIURL); saveErr != nil {
 				log.Fatalf("Failed to save identity: %v", saveErr)
 			}
 			log.Printf("Agent registered for org %s employee %s", orgID, employeeID)
