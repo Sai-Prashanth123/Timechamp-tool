@@ -60,6 +60,9 @@ func run() {
 	// or tray process exits.
 	detachConsole()
 
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+
 	cfg := config.Load()
 
 	// Set up rotating log file (10 MB cap, 3 backups: agent.log.1/2/3).
@@ -325,19 +328,17 @@ func run() {
 		cfg.ScreenshotInterval, cfg.SyncInterval, cfg.IdleThreshold)
 
 	// ── Tickers ────────────────────────────────────────────────────────────────
-	// Window polling at 1 second (matches ActivityWatch aw-watcher-window default).
-	windowTicker     := time.NewTicker(1 * time.Second)
-	screenshotTicker := time.NewTicker(time.Duration(cfg.ScreenshotInterval) * time.Second)
-	syncTicker       := agentsync.NewJitteredTicker(time.Duration(cfg.SyncInterval) * time.Second)
-	inputTicker      := time.NewTicker(60 * time.Second)
-	metricsTicker    := time.NewTicker(15 * time.Second)
+	screenshotTicker   := time.NewTicker(time.Duration(cfg.ScreenshotInterval) * time.Second)
+	syncTicker         := agentsync.NewJitteredTicker(time.Duration(cfg.SyncInterval) * time.Second)
+	inputTicker        := time.NewTicker(60 * time.Second)
+	metricsTicker      := time.NewTicker(15 * time.Second)
 	metricsFlushTicker := time.NewTicker(60 * time.Second)
-	heartbeatTicker  := time.NewTicker(1 * time.Minute)
-	configTicker     := time.NewTicker(5 * time.Minute)
-	pruneTicker      := time.NewTicker(24 * time.Hour)
-	telemetryTicker  := time.NewTicker(60 * time.Second)
+	heartbeatTicker    := time.NewTicker(1 * time.Minute)
+	configTicker       := time.NewTicker(5 * time.Minute)
+	pruneTicker        := time.NewTicker(24 * time.Hour)
+	telemetryTicker    := time.NewTicker(60 * time.Second)
+	idleTicker         := time.NewTicker(1 * time.Second)
 
-	defer windowTicker.Stop()
 	defer screenshotTicker.Stop()
 	defer syncTicker.Stop()
 	defer inputTicker.Stop()
@@ -347,6 +348,22 @@ func run() {
 	defer configTicker.Stop()
 	defer pruneTicker.Stop()
 	defer telemetryTicker.Stop()
+	defer idleTicker.Stop()
+
+	// Try event-driven window tracking first; fall back to 1s polling if hook fails.
+	windowEvents, hookErr := capture.StartWindowEventStream(runCtx)
+	if hookErr != nil {
+		log.Printf("[agent] window hook failed (%v) — falling back to 1s poll", hookErr)
+		windowEvents = nil
+	}
+
+	var windowFallbackTicker *time.Ticker
+	var windowFallbackC <-chan time.Time
+	if windowEvents == nil {
+		windowFallbackTicker = time.NewTicker(time.Second)
+		windowFallbackC = windowFallbackTicker.C
+		defer windowFallbackTicker.Stop()
+	}
 
 	telemetryCollector := telemetry.NewCollector(Version, cfg.OrgID, cfg.EmployeeID)
 	var (
@@ -356,6 +373,22 @@ func run() {
 	)
 
 	inputCounter := &capture.InputCounter{}
+
+	pushWindow := func(win capture.ActiveWindow, ts time.Time) {
+		extURL := urlCache.Load().(string)
+		url := capture.ResolveURL(win, extURL)
+		cat := classifier.Classify(win.AppName, win.WindowTitle, url, classifier.DefaultRules)
+		hq.Push(windowStream, heartbeat.Event{
+			Timestamp: ts,
+			Duration:  1 * time.Second,
+			Data: map[string]string{
+				"app":      win.AppName,
+				"title":    win.WindowTitle,
+				"url":      url,
+				"category": cat,
+			},
+		}, pulsetime)
+	}
 
 	// Graceful shutdown.
 	// Ignore SIGINT (Ctrl+C / CTRL_C_EVENT) entirely — this daemon runs in the
@@ -419,53 +452,45 @@ func run() {
 				}
 			})
 
-		// ── Window poll (1 second) ─────────────────────────────────────────────
-		case t := <-windowTicker.C:
-			withRecover("window-poll", crashReporter, func() {
+		// ── Idle / AFK tick (1 second) ─────────────────────────────────────────────
+		case <-idleTicker.C:
+			withRecover("idle-tick", crashReporter, func() {
 				idleSec, _ := capture.IdleSeconds()
 				idleDur := time.Duration(idleSec) * time.Second
-
-				// ── AFK state machine (ActivityWatch pattern) ────────────────────
 				if !isAFK && idleDur >= afkThreshold {
-					// ACTIVE → AFK transition
-					// Flush current window session immediately on going AFK.
 					hq.FlushAll()
 					isAFK = true
 					log.Printf("[afk] user idle for %s — pausing tracking", idleDur.Round(time.Second))
 				} else if isAFK && idleDur < afkThreshold {
-					// AFK → ACTIVE transition
 					isAFK = false
 					log.Printf("[afk] user returned after %s idle", idleDur.Round(time.Second))
 				}
+			})
 
-				if isAFK {
-					return // was: continue
+		// ── Window event (hook or poll fallback) ───────────────────────────────────
+		case win, ok := <-windowEvents:
+			if !ok {
+				windowEvents = nil
+				continue
+			}
+			withRecover("window-event", crashReporter, func() {
+				if isAFK || win.AppName == "" {
+					return
 				}
+				pushWindow(win, time.Now())
+			})
 
-				// ── Window tracking ───────────────────────────────────────────────
+		// ── Window poll fallback (only active when hook is unavailable) ────────────
+		case <-windowFallbackC:
+			withRecover("window-poll", crashReporter, func() {
+				if isAFK {
+					return
+				}
 				win, err := capture.GetActiveWindow()
 				if err != nil || win.AppName == "" {
-					return // was: continue
+					return
 				}
-
-				// Resolve URL via 3-layer detection: extension cache → native → title parsing.
-				extURL := urlCache.Load().(string)
-				url := capture.ResolveURL(win, extURL)
-
-				// Classify app into a productivity category.
-				cat := classifier.Classify(win.AppName, win.WindowTitle, url, classifier.DefaultRules)
-
-				// Feed into heartbeat queue for pre-merge.
-				hq.Push(windowStream, heartbeat.Event{
-					Timestamp: t,
-					Duration:  1 * time.Second,
-					Data: map[string]string{
-						"app":      win.AppName,
-						"title":    win.WindowTitle,
-						"url":      url,
-						"category": cat,
-					},
-				}, pulsetime)
+				pushWindow(win, time.Now())
 			})
 
 		// ── Screenshots ────────────────────────────────────────────────────────
