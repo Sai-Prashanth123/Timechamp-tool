@@ -140,3 +140,41 @@ func getSystemMetrics() (SystemMetrics, error) {
 func DefaultCollector() *MetricsCollector {
 	return defaultCollector
 }
+
+// AddSample stores a new metric reading into the ring buffer.
+func (c *MetricsCollector) AddSample(m SystemMetrics) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.samples[c.sampleN%4] = m
+	c.sampleN++
+}
+
+// Average computes the mean of all buffered samples (up to 4), resets the
+// buffer, and returns the averaged result. Call once per reporting interval.
+func (c *MetricsCollector) Average() SystemMetrics {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := c.sampleN
+	if n == 0 {
+		return c.lastValid
+	}
+	if n > 4 {
+		n = 4
+	}
+	var cpuSum float64
+	var memSum uint64
+	for i := range n {
+		cpuSum += c.samples[i].CPUPercent
+		memSum += c.samples[i].MemUsedMB
+	}
+	avg := SystemMetrics{
+		CPUPercent:      cpuSum / float64(n),
+		MemUsedMB:       memSum / uint64(n),
+		MemTotalMB:      c.samples[0].MemTotalMB,
+		AgentCPUPercent: c.samples[n-1].AgentCPUPercent,
+		AgentMemMB:      c.samples[n-1].AgentMemMB,
+	}
+	c.sampleN = 0 // reset ring buffer for next interval
+	c.lastValid = avg
+	return avg
+}

@@ -330,7 +330,8 @@ func run() {
 	screenshotTicker := time.NewTicker(time.Duration(cfg.ScreenshotInterval) * time.Second)
 	syncTicker       := agentsync.NewJitteredTicker(time.Duration(cfg.SyncInterval) * time.Second)
 	inputTicker      := time.NewTicker(60 * time.Second)
-	metricsTicker    := time.NewTicker(60 * time.Second)
+	metricsTicker    := time.NewTicker(15 * time.Second)
+	metricsFlushTicker := time.NewTicker(60 * time.Second)
 	heartbeatTicker  := time.NewTicker(1 * time.Minute)
 	configTicker     := time.NewTicker(5 * time.Minute)
 	pruneTicker      := time.NewTicker(24 * time.Hour)
@@ -341,6 +342,7 @@ func run() {
 	defer syncTicker.Stop()
 	defer inputTicker.Stop()
 	defer metricsTicker.Stop()
+	defer metricsFlushTicker.Stop()
 	defer heartbeatTicker.Stop()
 	defer configTicker.Stop()
 	defer pruneTicker.Stop()
@@ -510,27 +512,40 @@ func run() {
 				}
 			})
 
-		// ── System metrics ─────────────────────────────────────────────────────
+		// ── System metrics (sample every 15s) ─────────────────────────────────
 		case <-metricsTicker.C:
-			withRecover("metrics-tick", crashReporter, func() {
+			withRecover("metrics-sample", crashReporter, func() {
 				m, err := capture.GetSystemMetrics()
 				if err != nil {
-					return // was: continue
+					return
 				}
-				if err := db.InsertMetrics(buffer.SystemMetricsEvent{
-					EmployeeID:      cfg.EmployeeID,
-					OrgID:           cfg.OrgID,
-					CPUPercent:      m.CPUPercent,
-					MemUsedMB:       m.MemUsedMB,
-					MemTotalMB:      m.MemTotalMB,
-					AgentCPUPercent: m.AgentCPUPercent,
-					AgentMemMB:      m.AgentMemMB,
-					RecordedAt:      time.Now(),
-				}); err != nil && buffer.IsDiskFull(err) {
-					log.Printf("CRITICAL: disk full — cannot write metrics to buffer.")
+				if dc := capture.DefaultCollector(); dc != nil {
+					dc.AddSample(m)
 				}
 				if m.AgentMemMB > 100 {
 					log.Printf("Warning: agent RAM %d MiB — check for memory leak", m.AgentMemMB)
+				}
+			})
+
+		// ── System metrics flush (average 4 samples, insert every 60s) ────────
+		case <-metricsFlushTicker.C:
+			withRecover("metrics-flush", crashReporter, func() {
+				dc := capture.DefaultCollector()
+				if dc == nil {
+					return
+				}
+				avg := dc.Average()
+				if err := db.InsertMetrics(buffer.SystemMetricsEvent{
+					EmployeeID:      cfg.EmployeeID,
+					OrgID:           cfg.OrgID,
+					CPUPercent:      avg.CPUPercent,
+					MemUsedMB:       avg.MemUsedMB,
+					MemTotalMB:      avg.MemTotalMB,
+					AgentCPUPercent: avg.AgentCPUPercent,
+					AgentMemMB:      avg.AgentMemMB,
+					RecordedAt:      time.Now(),
+				}); err != nil && buffer.IsDiskFull(err) {
+					log.Printf("CRITICAL: disk full — cannot write metrics to buffer.")
 				}
 			})
 
