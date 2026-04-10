@@ -5,7 +5,8 @@ import { useSearchParams } from 'next/navigation'
 import { useStreaming } from '@/hooks/use-streaming'
 import { StreamGrid } from '@/components/streaming/stream-grid'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001'
+// Strip /api/v1 — Socket.io namespaces live on the root server URL, not the REST base path
+const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1').replace(/\/api\/v\d+\/?$/, '')
 
 export function LivePageClient({ token }: { token: string }) {
   const searchParams = useSearchParams()

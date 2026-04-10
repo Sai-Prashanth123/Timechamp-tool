@@ -24,7 +24,7 @@ export default function AdminPage() {
   const [tab, setTab] = useState<Tab>('overview');
 
   if (status === 'authenticated' && session?.user?.role !== 'admin') {
-    router.replace('/dashboard');
+    router.replace('/overview');
     return null;
   }
 

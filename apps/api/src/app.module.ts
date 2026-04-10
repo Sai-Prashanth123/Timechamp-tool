@@ -51,7 +51,12 @@ import { AdminModule } from './modules/admin/admin.module';
     ConfigModule.forRoot({
       isGlobal: true,
       validationSchema: Joi.object({
-        DATABASE_URL: Joi.string().required(),
+        DATABASE_URL: Joi.string().optional(),
+        DB_HOST: Joi.string().optional(),
+        DB_PORT: Joi.number().default(5432),
+        DB_USER: Joi.string().optional(),
+        DB_PASS: Joi.string().optional(),
+        DB_NAME: Joi.string().default('postgres'),
         REDIS_URL: Joi.string().optional(),
         JWT_SECRET: Joi.string().min(32).required(),
         JWT_EXPIRES_IN: Joi.string().default('15m'),
@@ -76,6 +81,8 @@ import { AdminModule } from './modules/admin/admin.module';
         B2_KEY_ID: Joi.string().when('B2_BUCKET', { is: Joi.exist(), then: Joi.required(), otherwise: Joi.optional() }),
         B2_APP_KEY: Joi.string().when('B2_BUCKET', { is: Joi.exist(), then: Joi.required(), otherwise: Joi.optional() }),
         B2_CDN_URL: Joi.string().optional(),
+        SUPABASE_URL: Joi.string().uri().optional(),
+        SUPABASE_SERVICE_KEY: Joi.string().optional(),
         STREAMING_ENABLED: Joi.boolean().default(false),
         WS_CORS_ORIGIN: Joi.string().optional(),
         DAILY_BW_CAP_MB: Joi.number().default(500),
@@ -84,10 +91,24 @@ import { AdminModule } from './modules/admin/admin.module';
     }),
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        type: 'postgres',
-        url: config.get('DATABASE_URL'),
-        entities: [
+      useFactory: (config: ConfigService) => {
+        const dbHost = config.get<string>('DB_HOST');
+        const useIndividual = !!dbHost;
+        const baseConfig = useIndividual
+          ? {
+              host: dbHost,
+              port: config.get<number>('DB_PORT') ?? 5432,
+              username: config.get<string>('DB_USER'),
+              password: config.get<string>('DB_PASS'),
+              database: config.get<string>('DB_NAME') ?? 'postgres',
+            }
+          : { url: config.get<string>('DATABASE_URL') };
+        const isSupabase =
+          (dbHost ?? config.get<string>('DATABASE_URL') ?? '').includes('supabase');
+        return {
+          type: 'postgres' as const,
+          ...baseConfig,
+          entities: [
           Organization,
           User,
           Subscription,
@@ -113,15 +134,13 @@ import { AdminModule } from './modules/admin/admin.module';
           AgentMetric,
           AuditLog,
         ],
-        migrations: ['dist/database/migrations/*.js'],
-        migrationsRun: false,
-        synchronize: config.get('NODE_ENV') !== 'production',
-        logging: config.get('NODE_ENV') !== 'production',
-        ssl:
-          config.get('NODE_ENV') === 'production'
-            ? { rejectUnauthorized: true }
-            : false,
-      }),
+          migrations: ['dist/database/migrations/*.js'],
+          migrationsRun: false,
+          synchronize: false,
+          logging: config.get('NODE_ENV') !== 'production',
+          ssl: isSupabase ? { rejectUnauthorized: false } : false,
+        };
+      },
     }),
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 1000 }]),
     ScheduleModule.forRoot(),

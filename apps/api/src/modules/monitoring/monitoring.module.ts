@@ -8,11 +8,12 @@ import { MonitoringGateway } from './monitoring.gateway';
 import { ActivityEvent } from '../../database/entities/activity-event.entity';
 import { Screenshot } from '../../database/entities/screenshot.entity';
 import { Attendance } from '../../database/entities/attendance.entity';
+import { AgentDevice } from '../../database/entities/agent-device.entity';
 import { AgentModule } from '../agent/agent.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([ActivityEvent, Screenshot, Attendance]),
+    TypeOrmModule.forFeature([ActivityEvent, Screenshot, Attendance, AgentDevice]),
     forwardRef(() => AgentModule),
     JwtModule.registerAsync({
       imports: [ConfigModule],

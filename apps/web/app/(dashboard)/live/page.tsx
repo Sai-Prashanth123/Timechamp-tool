@@ -7,9 +7,9 @@ export default async function LivePage() {
   const session = await getServerSession(authOptions)
   if (!session) redirect('/login')
 
-  const role = (session.user as any)?.role
-  if (role !== 'MANAGER' && role !== 'ADMIN') {
-    redirect('/dashboard')
+  const role = session.user?.role
+  if (role !== 'manager' && role !== 'admin') {
+    redirect('/overview')
   }
 
   return <LivePageClient token={(session as any).accessToken ?? ''} />

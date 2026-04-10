@@ -47,9 +47,26 @@ export class StreamingGateway implements OnGatewayConnection, OnGatewayDisconnec
       return;
     }
 
-    // Try agent token first
-    const agentUser = await this.userRepo.findOne({ where: { agentToken: token } as any });
-    if (agentUser) {
+    // Try JWT first (manager/dashboard connections send JWTs).
+    // This must come first — passing a JWT to a UUID column causes a Postgres type error.
+    try {
+      const payload = this.jwtService.verify(token) as { sub: string; orgId: string };
+      const conn: ConnectionMeta = { userId: payload.sub, orgId: payload.orgId, isAgent: false };
+      this.connections.set(client.id, conn);
+      client.join(`manager:${payload.orgId}`);
+      return;
+    } catch {
+      // Not a JWT — fall through to agent token check.
+    }
+
+    // Try agent token (desktop agent sends a UUID device token).
+    try {
+      const agentUser = await this.userRepo.findOne({ where: { agentToken: token } as any });
+      if (!agentUser) {
+        client.disconnect();
+        return;
+      }
+
       const conn: ConnectionMeta = { userId: agentUser.id, orgId: agentUser.organizationId, isAgent: true };
       this.connections.set(client.id, conn);
       this.agentSockets.set(agentUser.id, client.id);
@@ -66,16 +83,8 @@ export class StreamingGateway implements OnGatewayConnection, OnGatewayDisconnec
       }, maxHours * 3600 * 1000);
 
       this.connections.set(client.id, { ...conn, timeout });
-      return;
-    }
-
-    // Try JWT (manager)
-    try {
-      const payload = this.jwtService.verify(token) as { sub: string; orgId: string };
-      const conn: ConnectionMeta = { userId: payload.sub, orgId: payload.orgId, isAgent: false };
-      this.connections.set(client.id, conn);
-      client.join(`manager:${payload.orgId}`);
-    } catch {
+    } catch (err) {
+      this.logger.warn(`StreamingGateway: handleConnection error: ${err}`);
       client.disconnect();
     }
   }

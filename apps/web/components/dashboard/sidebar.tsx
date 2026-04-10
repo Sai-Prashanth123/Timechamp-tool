@@ -11,7 +11,7 @@ import {
 
 const NAV_ITEMS = [
   { href: '/overview',              label: 'Overview',      icon: LayoutDashboard },
-  { href: '/employees',             label: 'Employees',     icon: Users           },
+  { href: '/settings/users',        label: 'Employees',     icon: Users           },
   { href: '/time-tracking',         label: 'Time Tracking', icon: Clock           },
   { href: '/monitoring',            label: 'Monitoring',    icon: Monitor         },
   { href: '/live',                  label: 'Live',          icon: Radio           },

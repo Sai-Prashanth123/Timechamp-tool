@@ -5,6 +5,9 @@ import { useLiveStatus, elapsedSince } from '@/hooks/use-monitoring';
 import { useMonitoringStore, EmployeeStatus } from '@/stores/monitoring-store';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
+// Stable reference — prevents new [] on every render which would cause infinite useEffect loop
+const EMPTY_EMPLOYEES: never[] = [];
+
 function initials(name: string): string {
   const parts = name.split(' ');
   return parts.map((p) => p[0] ?? '').join('').toUpperCase().slice(0, 2);
@@ -20,7 +23,7 @@ function StatusBadge({ status }: { status: EmployeeStatus['status'] }) {
 }
 
 export function LiveStatusBoard() {
-  const { data: seedEmployees = [] } = useLiveStatus();
+  const { data: seedEmployees = EMPTY_EMPLOYEES } = useLiveStatus();
 
   const storeEmployees = useMonitoringStore((s) => s.employees);
   const storeNames = useMonitoringStore((s) => s.employeeNames);
@@ -44,7 +47,8 @@ export function LiveStatusBoard() {
         lastSeen: emp.lastSeenAt ?? emp.clockedInSince ?? new Date().toISOString(),
       });
     }
-  }, [seedEmployees, _setStatus, _seedNames]);
+  // _setStatus and _seedNames are stable Zustand actions — safe to omit from deps
+  }, [seedEmployees]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const employees = Object.values(storeEmployees);
   const onlineCount = employees.filter((e) => e.status !== 'offline').length;

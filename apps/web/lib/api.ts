@@ -9,6 +9,11 @@ const api = axios.create({
 
 api.interceptors.request.use(async (config) => {
   const session = await getSession();
+  // If token refresh failed, force sign-out immediately
+  if ((session as any)?.error === 'RefreshFailed') {
+    await signOut({ callbackUrl: '/login' });
+    return config;
+  }
   const accessToken = (session as any)?.accessToken as string | undefined;
   if (accessToken) {
     config.headers.Authorization = `Bearer ${accessToken}`;

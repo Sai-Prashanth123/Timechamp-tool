@@ -1,4 +1,4 @@
-import { Injectable, ServiceUnavailableException, UnauthorizedException, Logger, forwardRef, Inject, Optional } from '@nestjs/common';
+import { Injectable, ServiceUnavailableException, UnauthorizedException, Logger, forwardRef, Inject, Optional, OnModuleInit } from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ConfigService } from '@nestjs/config';
@@ -6,6 +6,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { randomUUID } from 'crypto';
 import { ActivityEvent } from '../../database/entities/activity-event.entity';
 import { Screenshot } from '../../database/entities/screenshot.entity';
@@ -24,11 +25,13 @@ import { MonitoringGateway } from '../monitoring/monitoring.gateway';
 import { TokenService } from '../../infrastructure/token/token.service';
 
 @Injectable()
-export class AgentService {
+export class AgentService implements OnModuleInit {
   private readonly logger = new Logger(AgentService.name);
   private s3: S3Client | null = null;
   private bucket: string | null = null;
   private cdnUrl: string | null = null;
+  private supabase: SupabaseClient | null = null;
+  private readonly SCREENSHOTS_BUCKET = 'screenshots';
 
   constructor(
     private config: ConfigService,
@@ -77,6 +80,39 @@ export class AgentService {
         ...(endpoint ? { endpoint, forcePathStyle: false } : {}),
       });
     }
+
+    // Supabase Storage — takes priority when configured
+    const supabaseUrl = this.config.get<string>('SUPABASE_URL');
+    const supabaseServiceKey = this.config.get<string>('SUPABASE_SERVICE_KEY');
+    if (supabaseUrl && supabaseServiceKey) {
+      this.supabase = createClient(supabaseUrl, supabaseServiceKey, {
+        auth: { persistSession: false },
+      });
+    }
+  }
+
+  async onModuleInit() {
+    if (!this.supabase) return;
+    // Ensure the screenshots bucket exists — wrapped so a Supabase error never crashes the service
+    try {
+      const { data: buckets } = await this.supabase.storage.listBuckets();
+      const exists = buckets?.some((b) => b.name === this.SCREENSHOTS_BUCKET);
+      if (!exists) {
+        const { error } = await this.supabase.storage.createBucket(this.SCREENSHOTS_BUCKET, {
+          public: false,
+          fileSizeLimit: 10 * 1024 * 1024,
+        });
+        if (error) {
+          this.logger.error(`Failed to create storage bucket: ${error.message}`);
+        } else {
+          this.logger.log(`Created Supabase Storage bucket: ${this.SCREENSHOTS_BUCKET}`);
+        }
+      } else {
+        this.logger.log(`Supabase Storage bucket ready: ${this.SCREENSHOTS_BUCKET}`);
+      }
+    } catch (err) {
+      this.logger.error(`Supabase Storage init failed (non-fatal): ${err}`);
+    }
   }
 
   async saveActivities(user: User, dto: SyncActivityDto): Promise<number> {
@@ -84,8 +120,8 @@ export class AgentService {
       this.activityRepo.create({
         userId: user.id,
         organizationId: user.organizationId,
-        appName: e.appName,
-        windowTitle: e.windowTitle ?? null,
+        appName: e.appName.slice(0, 255),
+        windowTitle: e.windowTitle ? e.windowTitle.slice(0, 500) : null,
         startedAt: new Date(e.startedAt),
         durationSec: e.durationSec ?? Math.round((e.durationMs ?? 0) / 1000),
         keystrokeCount: e.keystrokeCount ?? 0,
@@ -105,22 +141,33 @@ export class AgentService {
   }
 
   async generateUploadUrl(user: User): Promise<{ uploadUrl: string; screenshotKey: string }> {
-    if (!this.s3 || !this.bucket) {
-      throw new ServiceUnavailableException(
-        'Screenshot storage is not configured (S3_BUCKET env var missing)',
-      );
-    }
     const ts = new Date().toISOString().replace(/[:.]/g, '-');
-    const screenshotKey = `screenshots/${user.organizationId}/${user.id}/${ts}.jpg`;
+    const screenshotKey = `${user.organizationId}/${user.id}/${ts}.jpg`;
 
-    const command = new PutObjectCommand({
-      Bucket: this.bucket,
-      Key: screenshotKey,
-      ContentType: 'image/jpeg',
-    });
-    const uploadUrl = await getSignedUrl(this.s3, command, { expiresIn: 300 });
+    // Supabase Storage (preferred)
+    if (this.supabase) {
+      const { data, error } = await this.supabase.storage
+        .from(this.SCREENSHOTS_BUCKET)
+        .createSignedUploadUrl(screenshotKey);
+      if (error) throw new ServiceUnavailableException(`Supabase Storage error: ${error.message}`);
+      if (!data?.signedUrl) throw new ServiceUnavailableException('Supabase Storage returned empty upload URL');
+      return { uploadUrl: data.signedUrl, screenshotKey };
+    }
 
-    return { uploadUrl, screenshotKey };
+    // S3 / B2 fallback
+    if (this.s3 && this.bucket) {
+      const command = new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: `screenshots/${screenshotKey}`,
+        ContentType: 'image/jpeg',
+      });
+      const uploadUrl = await getSignedUrl(this.s3, command, { expiresIn: 300 });
+      return { uploadUrl, screenshotKey: `screenshots/${screenshotKey}` };
+    }
+
+    throw new ServiceUnavailableException(
+      'Screenshot storage is not configured (set SUPABASE_URL + SUPABASE_SERVICE_KEY)',
+    );
   }
 
   async saveScreenshot(user: User, dto: SyncScreenshotDto): Promise<Screenshot> {
@@ -141,6 +188,15 @@ export class AgentService {
   }
 
   async getPresignedDownloadUrl(s3Key: string): Promise<string> {
+    // Supabase Storage
+    if (this.supabase) {
+      const { data, error } = await this.supabase.storage
+        .from(this.SCREENSHOTS_BUCKET)
+        .createSignedUrl(s3Key, 3600);
+      if (error) return '';
+      return data.signedUrl;
+    }
+
     if (!this.s3 || !this.bucket) return '';
     // If CDN URL is configured (B2 + Cloudflare CDN), serve directly — zero egress cost
     if (this.cdnUrl) {

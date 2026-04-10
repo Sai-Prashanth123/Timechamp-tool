@@ -183,7 +183,7 @@ function EventsTab() {
               </td>
               <td className="px-4 py-3 text-slate-600 max-w-sm">{event.message ?? (event.rule?.name ?? '—')}</td>
               <td className="px-4 py-3 text-xs text-slate-500 whitespace-nowrap">
-                {new Date(event.triggeredAt).toLocaleString()}
+                {new Date(event.createdAt).toLocaleString()}
               </td>
               <td className="px-4 py-3">
                 {event.seenAt

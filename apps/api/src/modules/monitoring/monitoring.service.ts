@@ -1,9 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between } from 'typeorm';
+import { Repository, Between, MoreThan } from 'typeorm';
 import { ActivityEvent } from '../../database/entities/activity-event.entity';
 import { Screenshot } from '../../database/entities/screenshot.entity';
 import { Attendance } from '../../database/entities/attendance.entity';
+import { AgentDevice } from '../../database/entities/agent-device.entity';
 import { AgentService } from '../agent/agent.service';
 import { RedisService } from '../../infrastructure/redis/redis.service';
 
@@ -15,6 +16,9 @@ export type LiveEmployee = {
   currentApp: string | null;
   lastSeenAt: Date | null;
 };
+
+// Agent is considered "online" if it sent a heartbeat within this window
+const ONLINE_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
 
 export type ScreenshotWithUrl = {
   id: string;
@@ -33,6 +37,8 @@ export class MonitoringService {
     private screenshotRepo: Repository<Screenshot>,
     @InjectRepository(Attendance)
     private attendanceRepo: Repository<Attendance>,
+    @InjectRepository(AgentDevice)
+    private deviceRepo: Repository<AgentDevice>,
     private agentService: AgentService,
     private redis: RedisService,
   ) {}
@@ -86,25 +92,27 @@ export class MonitoringService {
     const cached = await this.redis.get(cacheKey);
     if (cached) return JSON.parse(cached) as LiveEmployee[];
 
-    const openAttendances = await this.attendanceRepo.find({
-      where: { organizationId, clockOut: null as any },
+    // Consider any device that sent a heartbeat in the last 5 minutes as "online"
+    const since = new Date(Date.now() - ONLINE_WINDOW_MS);
+    const activeDevices = await this.deviceRepo.find({
+      where: { organizationId, isActive: true, lastSeenAt: MoreThan(since) },
       relations: ['user'],
-      order: { clockIn: 'ASC' },
+      order: { lastSeenAt: 'DESC' },
     });
 
     const result = await Promise.all(
-      openAttendances.map(async (att) => {
+      activeDevices.map(async (device) => {
         const lastActivity = await this.activityRepo.findOne({
-          where: { userId: att.userId, organizationId },
+          where: { userId: device.userId, organizationId },
           order: { startedAt: 'DESC' },
         });
         return {
-          userId: att.userId,
-          firstName: att.user?.firstName ?? '',
-          lastName: att.user?.lastName ?? '',
-          clockedInSince: att.clockIn,
+          userId: device.userId,
+          firstName: device.user?.firstName ?? '',
+          lastName: device.user?.lastName ?? '',
+          clockedInSince: device.lastSeenAt ?? device.createdAt,
           currentApp: lastActivity?.appName ?? null,
-          lastSeenAt: lastActivity?.startedAt ?? null,
+          lastSeenAt: device.lastSeenAt,
         };
       }),
     );

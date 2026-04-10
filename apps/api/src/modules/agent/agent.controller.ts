@@ -47,7 +47,7 @@ export class AgentController {
   @ApiOperation({ summary: 'Get a presigned S3 PUT URL for screenshot upload' })
   async getUploadUrl(@AgentCurrentUser() user: User) {
     const { uploadUrl, screenshotKey } = await this.service.generateUploadUrl(user);
-    return { data: { uploadUrl, s3Key: screenshotKey } };
+    return { uploadUrl, s3Key: screenshotKey };
   }
 
   @Post('screenshots')
@@ -99,6 +99,14 @@ export class AgentController {
   @ApiOperation({ summary: 'Batch-upload system metrics snapshots from the desktop agent' })
   async syncMetrics(@Body() dto: SyncMetricsDto) {
     await this.service.saveMetrics(dto);
+    return { ok: true };
+  }
+
+  @Post('telemetry')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Agent telemetry sink (accepted and discarded server-side)' })
+  syncTelemetry() {
+    // Telemetry is for future use; accepted to prevent 404 errors in agent logs.
     return { ok: true };
   }
 }
