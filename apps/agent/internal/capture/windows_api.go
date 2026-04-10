@@ -36,6 +36,7 @@ var (
 	getTickCount64Proc        = kernel32.NewProc("GetTickCount64")
 	queryFullProcessImageName = kernel32.NewProc("QueryFullProcessImageNameW")
 	globalMemoryStatusEx      = kernel32.NewProc("GlobalMemoryStatusEx")
+	procGetCurrentThreadId    = kernel32.NewProc("GetCurrentThreadId")
 )
 
 // ── psapi.dll ─────────────────────────────────────────────────────────────────

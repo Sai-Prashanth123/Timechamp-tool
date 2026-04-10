@@ -470,7 +470,13 @@ func run() {
 		// ── Window event (hook or poll fallback) ───────────────────────────────────
 		case win, ok := <-windowEvents:
 			if !ok {
+				log.Printf("[agent] window event stream closed — falling back to 1s poll")
 				windowEvents = nil
+				if windowFallbackTicker == nil {
+					windowFallbackTicker = time.NewTicker(time.Second)
+					windowFallbackC = windowFallbackTicker.C
+					defer windowFallbackTicker.Stop()
+				}
 				continue
 			}
 			withRecover("window-event", crashReporter, func() {

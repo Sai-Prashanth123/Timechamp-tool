@@ -26,9 +26,10 @@ const (
 )
 
 var (
-	procSetWinEventHook = user32.NewProc("SetWinEventHook")
-	procUnhookWinEvent  = user32.NewProc("UnhookWinEvent")
-	procGetMessage      = user32.NewProc("GetMessageW")
+	procSetWinEventHook  = user32.NewProc("SetWinEventHook")
+	procUnhookWinEvent   = user32.NewProc("UnhookWinEvent")
+	procGetMessage       = user32.NewProc("GetMessageW")
+	procPostThreadMessage = user32.NewProc("PostThreadMessageW")
 
 	// globalWindowCh receives foreground-change events from the WinEvent callback.
 	globalWindowCh atomic.Pointer[chan<- ActiveWindow]
@@ -45,7 +46,7 @@ func winEventProc(hook, event, hwnd, idObj, idChild uintptr, thread, ts uint32) 
 	if ch == nil {
 		return 0
 	}
-	win, err := getActiveWindowImpl()
+	win, err := getActiveWindow()
 	if err != nil {
 		return 0
 	}
@@ -71,6 +72,15 @@ func StartWindowEventStream(ctx context.Context) (<-chan ActiveWindow, error) {
 		defer runtime.UnlockOSThread()
 		defer globalWindowCh.Store(nil)
 
+		// Capture thread ID so ctx-cancel watcher can post WM_QUIT.
+		tid, _, _ := procGetCurrentThreadId.Call()
+
+		// Watch ctx in a separate goroutine — post WM_QUIT to wake GetMessageW.
+		go func() {
+			<-ctx.Done()
+			procPostThreadMessage.Call(tid, 0x0012, 0, 0) // WM_QUIT = 0x0012
+		}()
+
 		hook, _, err := procSetWinEventHook.Call(
 			EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
 			0, winEventProcCallback, 0, 0,
@@ -93,11 +103,6 @@ func StartWindowEventStream(ctx context.Context) (<-chan ActiveWindow, error) {
 		}
 		var msg MSG
 		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
 			r, _, _ := procGetMessage.Call(uintptr(unsafe.Pointer(&msg)), 0, 0, 0)
 			if r == 0 || r == ^uintptr(0) { // WM_QUIT or error
 				return
