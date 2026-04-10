@@ -97,16 +97,20 @@ func isMDMBlocked(exitCode, output string) bool {
 }
 
 // darwinHome returns the user home directory with defensive fallbacks.
+// UserHomeDir is preferred; if it fails (e.g. launchd restricted env),
+// we try /Users/$USER then /var/root before giving up and using /tmp.
 func darwinHome() string {
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		return home
 	}
-	for _, c := range []string{"/Users/" + os.Getenv("USER"), "/var/root"} {
-		if c != "/Users/" {
-			if _, err := os.Stat(c); err == nil {
-				return c
-			}
+	// Guard against empty USER env var before building the path.
+	if user := os.Getenv("USER"); user != "" {
+		if _, err := os.Stat("/Users/" + user); err == nil {
+			return "/Users/" + user
 		}
+	}
+	if _, err := os.Stat("/var/root"); err == nil {
+		return "/var/root"
 	}
 	return "/tmp"
 }
@@ -227,14 +231,16 @@ func bootstrapAgent(plistPath, binaryPath string) (warnings []string, err error)
 	}
 	if isMDMBlocked(exitCode, string(out)) {
 		// Best-effort: launch binary directly for this session only.
+		// The agent will NOT survive reboot — user must contact IT to whitelist.
 		cmd := exec.Command(binaryPath)
 		cmd.Env = os.Environ()
-		cmd.Start() //nolint:errcheck
-		return []string{
-			"MDM_BLOCKED: Your organisation's IT policy blocked background agent registration. " +
-				"Contact IT and share error code MDM-125. " +
-				"The agent will run until next reboot.",
-		}, nil
+		warning := "MDM_BLOCKED: Your organisation's IT policy blocked background agent registration. " +
+			"Contact IT and share error code MDM-125. " +
+			"The agent will run until next reboot."
+		if startErr := cmd.Start(); startErr != nil {
+			warning += " (Direct launch also failed: " + startErr.Error() + ")"
+		}
+		return []string{warning}, nil
 	}
 
 	// Fallback: deprecated launchctl load (macOS < 10.15).
