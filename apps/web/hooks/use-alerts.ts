@@ -34,6 +34,7 @@ export type AlertEvent = {
   type: AlertType | null;
   message: string | null;
   seenAt: string | null;
+  triggeredAt: string;
   createdAt: string;
   rule?: AlertRule | null;
 };
