@@ -11,17 +11,24 @@ import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { AgentService } from './agent.service';
 import { AgentAuthGuard } from './agent-auth.guard';
 import { AgentCurrentUser } from './agent-current-user.decorator';
+import { LiveWatchCache } from '../streaming/live-watch-cache.service';
 import { SyncActivityDto } from './dto/sync-activity.dto';
 import { SyncMetricsDto } from './dto/sync-metrics.dto';
 import { SyncScreenshotDto } from './dto/sync-screenshot.dto';
 import { SyncGpsDto } from './dto/sync-gps.dto';
+import { SyncKeystrokesDto } from './dto/sync-keystrokes.dto';
+import { SyncTelemetryDto } from './dto/sync-telemetry.dto';
+import { HeartbeatDto } from './dto/heartbeat.dto';
 import { User } from '../../database/entities/user.entity';
 
 @ApiTags('Agent Sync')
 @UseGuards(AgentAuthGuard)
 @Controller('agent/sync')
 export class AgentController {
-  constructor(private readonly service: AgentService) {}
+  constructor(
+    private readonly service: AgentService,
+    private readonly liveWatchCache: LiveWatchCache,
+  ) {}
 
   @Post('activity')
   @HttpCode(HttpStatus.OK)
@@ -36,16 +43,20 @@ export class AgentController {
 
   @Post('keystrokes')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Keystroke counts (rolled up into activity events, no-op here)' })
-  syncKeystrokes() {
-    // Keystroke counts are already included in SyncActivityDto.keystrokeCount.
-    // This endpoint exists so the Go agent does not receive 404 errors.
-    return { accepted: true };
+  @ApiOperation({ summary: 'Batch-upload per-minute keystroke/mouse intensity from the desktop agent' })
+  async syncKeystrokes(
+    @AgentCurrentUser() user: User,
+    @Body() dto: SyncKeystrokesDto,
+  ) {
+    const saved = await this.service.saveKeystrokes(user, dto);
+    return { saved };
   }
 
   @Get('screenshots/upload-url')
   @ApiOperation({ summary: 'Get a presigned S3 PUT URL for screenshot upload' })
   async getUploadUrl(@AgentCurrentUser() user: User) {
+    // Return flat — the global TransformInterceptor wraps every response in
+    // { success, data, timestamp }. Hand-wrapping in `data:` causes double nesting.
     const { uploadUrl, screenshotKey } = await this.service.generateUploadUrl(user);
     return { uploadUrl, s3Key: screenshotKey };
   }
@@ -71,42 +82,60 @@ export class AgentController {
     return { saved };
   }
 
+  @Get('commands')
+  @ApiOperation({ summary: 'Poll for out-of-band commands (live-view watch flag, etc.)' })
+  getCommands(@AgentCurrentUser() user: User) {
+    // Returns a compact command object that the agent polls every 2 seconds.
+    // Currently only carries the live-view watch flag — managers click
+    // "Watch Live" on the dashboard which calls markWatched() with a 60s TTL,
+    // and the agent picks it up here to flip itself into burst-capture mode.
+    return { liveView: this.liveWatchCache.isWatched(user.id) };
+  }
+
   @Get('config')
   @ApiOperation({ summary: 'Get agent configuration for the authenticated org' })
   async getConfig(@AgentCurrentUser() user: User) {
+    // Return flat — global TransformInterceptor wraps in { success, data, timestamp }.
     const org = await this.service.getOrgConfig(user.organizationId);
     return {
-      data: {
-        screenshotIntervalSec: org.screenshotIntervalSec,
-        streamingEnabled: org.streamingEnabled,
-        cameraEnabled: org.cameraEnabled,
-        audioEnabled: org.audioEnabled,
-        maxStreamFps: org.maxStreamFps,
-      },
+      screenshotIntervalSec: org.screenshotIntervalSec,
+      streamingEnabled: org.streamingEnabled,
+      cameraEnabled: org.cameraEnabled,
+      audioEnabled: org.audioEnabled,
+      maxStreamFps: org.maxStreamFps,
     };
   }
 
   @Post('heartbeat')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Update agent last_seen_at' })
-  async heartbeat(@AgentCurrentUser() user: User) {
-    await this.service.recordHeartbeat(user);
+  @ApiOperation({ summary: 'Update agent last_seen_at and report AFK state' })
+  async heartbeat(
+    @AgentCurrentUser() user: User,
+    @Body() dto: HeartbeatDto,
+  ) {
+    await this.service.recordHeartbeat(user, dto);
     return { ok: true };
   }
 
   @Post('metrics')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Batch-upload system metrics snapshots from the desktop agent' })
-  async syncMetrics(@Body() dto: SyncMetricsDto) {
-    await this.service.saveMetrics(dto);
+  async syncMetrics(
+    @AgentCurrentUser() user: User,
+    @Body() dto: SyncMetricsDto,
+  ) {
+    await this.service.saveMetrics(user, dto);
     return { ok: true };
   }
 
   @Post('telemetry')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Agent telemetry sink (accepted and discarded server-side)' })
-  syncTelemetry() {
-    // Telemetry is for future use; accepted to prevent 404 errors in agent logs.
+  @ApiOperation({ summary: 'Agent self-health telemetry (uptime, version, buffer depth, sync stats)' })
+  async syncTelemetry(
+    @AgentCurrentUser() user: User,
+    @Body() dto: SyncTelemetryDto,
+  ) {
+    await this.service.saveTelemetry(user, dto);
     return { ok: true };
   }
 }

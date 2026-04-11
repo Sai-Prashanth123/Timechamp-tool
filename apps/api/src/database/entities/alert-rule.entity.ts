@@ -14,7 +14,7 @@ export class AlertRule {
   @Column() name: string;
 
   /** Legacy free-text field — kept for backward compatibility. */
-  @Column({ length: 100, nullable: true }) metric: string | null;
+  @Column({ type: 'varchar', length: 100, nullable: true }) metric: string | null;
 
   @Column({
     type: 'enum',

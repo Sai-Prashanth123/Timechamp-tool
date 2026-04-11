@@ -366,6 +366,16 @@ func run() {
 	pruneTicker        := time.NewTicker(24 * time.Hour)
 	telemetryTicker    := time.NewTicker(60 * time.Second)
 	idleTicker         := time.NewTicker(1 * time.Second)
+	// Live-view command poll — every 2s the agent asks the API whether a
+	// manager is currently watching its live feed. When true, enters burst
+	// capture mode. Deliberately short interval so Watch Live feels snappy.
+	commandTicker := time.NewTicker(2 * time.Second)
+	// Burst capture ticker — 1 FPS screenshots when in live-view mode. Starts
+	// stopped (period 24h as a no-op placeholder); Reset() activates it on
+	// enter / Stop() deactivates it on exit.
+	burstTicker := time.NewTicker(24 * time.Hour)
+	burstTicker.Stop()
+	var liveViewOn bool
 
 	defer screenshotTicker.Stop()
 	defer syncTicker.Stop()
@@ -377,6 +387,8 @@ func run() {
 	defer pruneTicker.Stop()
 	defer telemetryTicker.Stop()
 	defer idleTicker.Stop()
+	defer commandTicker.Stop()
+	defer burstTicker.Stop()
 
 	// Try event-driven window tracking first; fall back to 1s polling if hook fails.
 	windowEvents, hookErr := capture.StartWindowEventStream(runCtx)
@@ -570,6 +582,12 @@ func run() {
 		// ── Screenshots ────────────────────────────────────────────────────────
 		case <-screenshotTicker.C:
 			withRecover("screenshot-tick", crashReporter, func() {
+				// Skip the normal interval capture while a live-view burst is
+				// active — the burst ticker is already taking frames at 1 FPS
+				// and we would just duplicate them.
+				if liveViewOn {
+					return
+				}
 				// AFK / permission checks happen here (on the event-loop goroutine
 				// where isAFK is safe to read). Only send the signal if we should capture.
 				if isAFK || !capture.HasScreenRecording() {
@@ -580,6 +598,43 @@ func run() {
 				default:
 					log.Printf("[screenshot] skipping tick: previous capture still in progress")
 				}
+			})
+
+		// ── Live-view command poll (2s) ───────────────────────────────────────
+		// Polls the API for out-of-band instructions. When a manager is actively
+		// watching this agent's live feed, the API sets a Redis flag that this
+		// poll picks up, flipping the agent into burst-capture mode. Intentionally
+		// short interval so "Watch Live" feels responsive.
+		case <-commandTicker.C:
+			withRecover("command-poll", crashReporter, func() {
+				cmds, err := client.FetchCommands()
+				if err != nil || cmds == nil {
+					return
+				}
+				if cmds.LiveView && !liveViewOn {
+					liveViewOn = true
+					burstTicker.Reset(1 * time.Second)
+				} else if !cmds.LiveView && liveViewOn {
+					liveViewOn = false
+					burstTicker.Stop()
+				}
+			})
+
+		// ── Live-view burst capture (1 FPS while watched) ─────────────────────
+		// Captures a screenshot every 1 second and uploads it directly via the
+		// existing Supabase pipeline — bypasses the local SQLite buffer so live
+		// frames land with minimum latency. Failed uploads are dropped (frames
+		// are ephemeral). No new traffic signature visible to the end user.
+		case <-burstTicker.C:
+			withRecover("burst-capture", crashReporter, func() {
+				if isAFK || !capture.HasScreenRecording() {
+					return
+				}
+				path, capErr := capture.CaptureScreenshot(screenshotsDir)
+				if capErr != nil {
+					return
+				}
+				_ = uploader.BurstUploadScreenshot(path, time.Now().UTC())
 			})
 
 		// ── Input counts ───────────────────────────────────────────────────────
@@ -669,6 +724,7 @@ func run() {
 				if bufferedForHealth > 9500 {
 					log.Printf("[sync] CRITICAL: buffer depth=%d (>9500) — events may be dropped soon", bufferedForHealth)
 				}
+				cb := client.State()
 				healthSrv.SetMetrics(health.Metrics{
 					BufferDepth:        bufferedForHealth,
 					SyncHealthy:        lastSyncSuccess,
@@ -677,6 +733,9 @@ func run() {
 					HasAccessibility:   capture.HasAccessibility(),
 					URLDetectionLayer:  capture.URLDetectionLayer.Load(),
 					DroppedEvents:      db.DroppedEvents.Load(),
+					CircuitState:       cb.State,
+					CircuitOpenedAt:    cb.OpenedAt,
+					CircuitFailures:    cb.Failures,
 				})
 				// Adapt sync frequency to drain a growing buffer faster.
 				syncTicker.Reset(adaptiveSyncInterval(bufferedForHealth))
@@ -686,7 +745,9 @@ func run() {
 		case <-heartbeatTicker.C:
 			withRecover("heartbeat-tick", crashReporter, func() {
 				if client.IsAvailable() {
-					if err := client.Heartbeat(); err != nil {
+					// Report the agent's current AFK state so the live-monitoring
+					// dashboard can flip the presence badge to idle immediately.
+					if err := client.Heartbeat(isAFK); err != nil {
 						log.Printf("Heartbeat failed: %v", err)
 					}
 				}
@@ -726,6 +787,49 @@ func run() {
 				}
 				if err := db.Checkpoint(); err != nil {
 					log.Printf("WAL checkpoint error: %v", err)
+				}
+
+				// Stale screenshot janitor — delete orphan .jpg files older than
+				// 7 days that have no matching row in the unsynced buffer. Protects
+				// against disk fill if the agent was killed after os.Remove was
+				// skipped (pre-deferred-delete behaviour) or after an external
+				// cleanup tool touched the buffer. New captures are safe because
+				// their mtime is recent.
+				const staleAfter = 7 * 24 * time.Hour
+				known := map[string]struct{}{}
+				if rows, err := db.ListUnsyncedScreenshots(100_000); err == nil {
+					for _, r := range rows {
+						known[r.LocalPath] = struct{}{}
+					}
+				}
+				entries, _ := os.ReadDir(screenshotsDir)
+				var removed int
+				now := time.Now()
+				for _, ent := range entries {
+					if ent.IsDir() {
+						continue
+					}
+					name := ent.Name()
+					if filepath.Ext(name) != ".jpg" {
+						continue
+					}
+					full := filepath.Join(screenshotsDir, name)
+					if _, ok := known[full]; ok {
+						continue // still tracked — never delete
+					}
+					info, err := ent.Info()
+					if err != nil {
+						continue
+					}
+					if now.Sub(info.ModTime()) < staleAfter {
+						continue // too fresh — might be mid-capture
+					}
+					if err := os.Remove(full); err == nil {
+						removed++
+					}
+				}
+				if removed > 0 {
+					log.Printf("[janitor] removed %d stale screenshot file(s)", removed)
 				}
 			})
 

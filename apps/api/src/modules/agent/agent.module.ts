@@ -13,12 +13,15 @@ import { GpsLocation } from '../../database/entities/gps-location.entity';
 import { Organization } from '../../database/entities/organization.entity';
 import { AgentDevice } from '../../database/entities/agent-device.entity';
 import { AgentMetric } from '../../database/entities/agent-metric.entity';
+import { KeystrokeEvent } from '../../database/entities/keystroke-event.entity';
+import { AgentTelemetry } from '../../database/entities/agent-telemetry.entity';
 import { MonitoringModule } from '../monitoring/monitoring.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([
       ActivityEvent, Screenshot, User, GpsLocation, Organization, AgentDevice, AgentMetric,
+      KeystrokeEvent, AgentTelemetry,
     ]),
     forwardRef(() => MonitoringModule),
   ],

@@ -45,11 +45,14 @@ type processMemoryCounters struct {
 }
 
 // systemProcessorPerformanceInformation for NtQuerySystemInformation(8)
+// Windows SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION layout (48 bytes):
+//   IdleTime, KernelTime, UserTime, DpcTime, InterruptTime (5×LARGE_INTEGER)
+//   + InterruptCount (ULONG) + 4-byte alignment padding = 48 bytes total.
 type systemProcessorPerfInfo struct {
 	idleTime   int64
 	kernelTime int64
 	userTime   int64
-	_          [2]int64 // reserved
+	_          [3]int64 // DpcTime, InterruptTime, InterruptCount+padding
 }
 
 type MetricsCollector struct {

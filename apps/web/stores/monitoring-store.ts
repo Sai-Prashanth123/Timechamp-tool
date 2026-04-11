@@ -8,9 +8,22 @@ export type EmployeeStatus = {
   lastSeen: string; // ISO string
 };
 
+// Per-user expiring timers — client-side fallback so presence converges to
+// reality even if the WS drops a message or Redis pub/sub is down. Any inbound
+// event resets both timers; when they fire, status is downgraded locally.
+// Layered on top of the server-side sweep cron (MonitoringService.sweepOfflineAgents).
+type PresenceTimers = {
+  idle?: ReturnType<typeof setTimeout>;
+  offline?: ReturnType<typeof setTimeout>;
+};
+
+const IDLE_AFTER_MS = 60_000; // 1 min without events → yellow
+const OFFLINE_AFTER_MS = 300_000; // 5 min without events → grey
+
 interface MonitoringStore {
   employees: Record<string, EmployeeStatus>;
   employeeNames: Record<string, { firstName: string; lastName: string }>;
+  timers: Record<string, PresenceTimers>;
   socket: Socket | null;
   connected: boolean;
 
@@ -19,11 +32,14 @@ interface MonitoringStore {
   _setStatus: (payload: EmployeeStatus) => void;
   _setActivity: (userId: string, appName: string, timestamp: string) => void;
   _seedNames: (employees: Array<{ userId: string; firstName: string; lastName: string }>) => void;
+  _resetPresenceTimers: (userId: string) => void;
+  _downgradeStatus: (userId: string, to: 'idle' | 'offline') => void;
 }
 
 export const useMonitoringStore = create<MonitoringStore>((set, get) => ({
   employees: {},
   employeeNames: {},
+  timers: {},
   socket: null,
   connected: false,
 
@@ -57,6 +73,10 @@ export const useMonitoringStore = create<MonitoringStore>((set, get) => ({
           },
         },
       }));
+      // Reset the per-user TTLs — unless the server is already telling us offline.
+      if (payload.status !== 'offline') {
+        get()._resetPresenceTimers(payload.userId);
+      }
     });
 
     socket.on('employee:activity', (payload: {
@@ -65,6 +85,7 @@ export const useMonitoringStore = create<MonitoringStore>((set, get) => ({
       timestamp: string;
     }) => {
       get()._setActivity(payload.userId, payload.appName, payload.timestamp);
+      get()._resetPresenceTimers(payload.userId);
     });
 
     set({ socket });
@@ -72,7 +93,12 @@ export const useMonitoringStore = create<MonitoringStore>((set, get) => ({
 
   disconnect() {
     get().socket?.disconnect();
-    set({ socket: null, connected: false });
+    // Clear all pending timers to prevent leaks on unmount.
+    for (const t of Object.values(get().timers)) {
+      if (t.idle) clearTimeout(t.idle);
+      if (t.offline) clearTimeout(t.offline);
+    }
+    set({ socket: null, connected: false, timers: {} });
   },
 
   _setStatus(payload) {
@@ -100,5 +126,31 @@ export const useMonitoringStore = create<MonitoringStore>((set, get) => ({
         employees.map((e) => [e.userId, { firstName: e.firstName, lastName: e.lastName }])
       ),
     }));
+  },
+
+  _resetPresenceTimers(userId) {
+    const existing = get().timers[userId];
+    if (existing?.idle) clearTimeout(existing.idle);
+    if (existing?.offline) clearTimeout(existing.offline);
+    const fresh: PresenceTimers = {
+      idle: setTimeout(() => get()._downgradeStatus(userId, 'idle'), IDLE_AFTER_MS),
+      offline: setTimeout(() => get()._downgradeStatus(userId, 'offline'), OFFLINE_AFTER_MS),
+    };
+    set((state) => ({ timers: { ...state.timers, [userId]: fresh } }));
+  },
+
+  _downgradeStatus(userId, to) {
+    set((state) => {
+      const existing = state.employees[userId];
+      if (!existing) return state;
+      // Don't upgrade — only allow monotonic downgrade online → idle → offline.
+      if (to === 'idle' && existing.status === 'offline') return state;
+      return {
+        employees: {
+          ...state.employees,
+          [userId]: { ...existing, status: to },
+        },
+      };
+    });
   },
 }));

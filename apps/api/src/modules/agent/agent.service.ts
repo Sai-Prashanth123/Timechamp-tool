@@ -15,10 +15,15 @@ import { User } from '../../database/entities/user.entity';
 import { Organization } from '../../database/entities/organization.entity';
 import { AgentDevice } from '../../database/entities/agent-device.entity';
 import { AgentMetric } from '../../database/entities/agent-metric.entity';
+import { KeystrokeEvent } from '../../database/entities/keystroke-event.entity';
+import { AgentTelemetry } from '../../database/entities/agent-telemetry.entity';
 import { SyncActivityDto } from './dto/sync-activity.dto';
 import { SyncMetricsDto } from './dto/sync-metrics.dto';
 import { SyncScreenshotDto } from './dto/sync-screenshot.dto';
 import { SyncGpsDto } from './dto/sync-gps.dto';
+import { SyncKeystrokesDto } from './dto/sync-keystrokes.dto';
+import { SyncTelemetryDto } from './dto/sync-telemetry.dto';
+import { HeartbeatDto } from './dto/heartbeat.dto';
 import { RegisterAgentDto } from './dto/register-agent.dto';
 import { CrashReportDto } from './dto/crash-report.dto';
 import { MonitoringGateway } from '../monitoring/monitoring.gateway';
@@ -49,6 +54,10 @@ export class AgentService implements OnModuleInit {
     private deviceRepo: Repository<AgentDevice>,
     @InjectRepository(AgentMetric)
     private metricsRepo: Repository<AgentMetric>,
+    @InjectRepository(KeystrokeEvent)
+    private keystrokeRepo: Repository<KeystrokeEvent>,
+    @InjectRepository(AgentTelemetry)
+    private telemetryRepo: Repository<AgentTelemetry>,
     private tokenService: TokenService,
     @Optional() @Inject(forwardRef(() => MonitoringGateway))
     private monitoringGateway: MonitoringGateway | undefined,
@@ -282,15 +291,19 @@ export class AgentService implements OnModuleInit {
     return { agentToken: deviceToken, employeeId: user.id, orgId: user.organizationId };
   }
 
-  async recordHeartbeat(user: User): Promise<void> {
+  async recordHeartbeat(user: User, dto: HeartbeatDto = {}): Promise<void> {
+    const now = new Date();
     await this.deviceRepo.update(
       { userId: user.id, isActive: true },
-      { lastSeenAt: new Date() },
+      { lastSeenAt: now },
     );
+    // Derive presence state from the agent's AFK self-report.
+    // If the agent reports idle=true, flip the badge; otherwise mark online.
+    // Offline transitions come from the periodic sweep cron in MonitoringService.
     this.monitoringGateway?.emitEmployeeStatus(user.organizationId, {
       userId: user.id,
-      status: 'online',
-      lastSeen: new Date(),
+      status: dto.idle ? 'idle' : 'online',
+      lastSeen: now,
     });
   }
 
@@ -298,11 +311,13 @@ export class AgentService implements OnModuleInit {
     return this.deviceRepo.findOne({ where: { deviceToken: token, isActive: true } });
   }
 
-  async saveMetrics(dto: SyncMetricsDto): Promise<void> {
+  async saveMetrics(user: User, dto: SyncMetricsDto): Promise<void> {
+    // Identity (employeeId, orgId) is taken from the authenticated agent user,
+    // NOT from the request body — prevents IDOR spoofing of metrics for another user.
     const records = dto.events.map((e) =>
       this.metricsRepo.create({
-        employeeId: e.employeeId,
-        orgId: e.orgId,
+        employeeId: user.id,
+        orgId: user.organizationId,
         cpuPercent: e.cpuPercent,
         memUsedMb: e.memUsedMb,
         memTotalMb: e.memTotalMb,
@@ -312,6 +327,41 @@ export class AgentService implements OnModuleInit {
       }),
     );
     await this.metricsRepo.save(records);
+  }
+
+  async saveKeystrokes(user: User, dto: SyncKeystrokesDto): Promise<number> {
+    const entities = dto.events.map((e) =>
+      this.keystrokeRepo.create({
+        userId: user.id,
+        organizationId: user.organizationId,
+        keysPerMin: e.keysPerMin,
+        mousePerMin: e.mousePerMin,
+        recordedAt: new Date(e.recordedAt),
+      }),
+    );
+    await this.keystrokeRepo.save(entities);
+    return entities.length;
+  }
+
+  async saveTelemetry(user: User, dto: SyncTelemetryDto): Promise<void> {
+    const entity = this.telemetryRepo.create({
+      userId: user.id,
+      organizationId: user.organizationId,
+      agentVersion: (dto.agent_version ?? '').slice(0, 32),
+      os: (dto.os ?? '').slice(0, 32),
+      uptimeSec: dto.uptime_sec ?? 0,
+      memUsedMb: dto.mem_used_mb ?? 0,
+      cpuPercent: dto.cpu_percent ?? 0,
+      lastSyncSuccess: dto.last_sync_success ?? false,
+      lastSyncLatencyMs: dto.last_sync_latency_ms ?? 0,
+      bufferedEvents: dto.buffered_events ?? 0,
+      syncErrorCount: dto.sync_error_count ?? 0,
+      hasScreenRecording: dto.has_screen_recording ?? false,
+      hasAccessibility: dto.has_accessibility ?? false,
+      urlDetectionLayer: dto.url_detection_layer ?? 0,
+      recordedAt: new Date(),
+    });
+    await this.telemetryRepo.save(entity);
   }
 
   async getDevicesForOrg(orgId: string): Promise<AgentDevice[]> {

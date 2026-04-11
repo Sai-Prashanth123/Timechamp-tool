@@ -24,8 +24,8 @@ const (
 )
 
 const (
-	circuitOpenThreshold = 3 // consecutive failures before opening circuit
-	circuitResetAfter    = 5 * time.Minute
+	circuitOpenThreshold = 3                // consecutive failures before opening circuit
+	circuitResetAfter    = 60 * time.Second // short enough for dev hot-reload, long enough to let a slow cold-start finish
 )
 
 // Client is an HTTP client for the TimeChamp API.
@@ -212,8 +212,11 @@ func (c *Client) PutPresigned(url string, data []byte, contentType string) error
 }
 
 // GetPresignedUploadURL requests a presigned URL from the API for a screenshot upload.
-// Note: intentionally bypasses the circuit breaker — not on the hot-path and
-// called infrequently (once per screenshot capture cycle).
+// This method does NOT take a fresh probe slot via IsAvailable — the caller
+// (FlushScreenshots) already gated the whole flush cycle with its own IsAvailable
+// check, so taking another one here would leak the half-open probe slot when
+// the inner check's `probeInFlight=true` causes this check to return false.
+// Circuit state is still kept in sync via recordSuccess / recordFailure below.
 func (c *Client) GetPresignedUploadURL(filename string) (uploadURL, s3Key string, err error) {
 	req, err := http.NewRequest(http.MethodGet, c.baseURL+"/agent/sync/screenshots/upload-url", nil)
 	if err != nil {
@@ -228,13 +231,38 @@ func (c *Client) GetPresignedUploadURL(filename string) (uploadURL, s3Key string
 
 	resp, err := c.http.Do(req)
 	if err != nil {
+		c.recordFailure()
+		log.Printf("[sync] GET /agent/sync/screenshots/upload-url transport error: %v", err)
 		return "", "", err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if isPermanentHTTPStatus(resp.StatusCode) {
+		// Auth / not-found errors — do not re-open the circuit; release probe slot.
+		c.mu.Lock()
+		if c.state == stateHalfOpen {
+			c.probeInFlight = false
+		}
+		c.mu.Unlock()
 		body, _ := io.ReadAll(resp.Body)
-		return "", "", fmt.Errorf("presign URL request failed (HTTP %d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		bodyStr := strings.TrimSpace(string(body))
+		log.Printf("[sync] GET /agent/sync/screenshots/upload-url permanent HTTP %d: %s", resp.StatusCode, bodyStr)
+		return "", "", fmt.Errorf("presign URL request failed (HTTP %d): %s", resp.StatusCode, bodyStr)
+	}
+	if resp.StatusCode != http.StatusOK {
+		c.recordFailure()
+		body, _ := io.ReadAll(resp.Body)
+		bodyStr := strings.TrimSpace(string(body))
+		log.Printf("[sync] GET /agent/sync/screenshots/upload-url HTTP %d: %s", resp.StatusCode, bodyStr)
+		return "", "", fmt.Errorf("presign URL request failed (HTTP %d): %s", resp.StatusCode, bodyStr)
+	}
+
+	// Read the full body first so we can log it if parsing fails or the URL is empty.
+	bodyBytes, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		c.recordFailure()
+		log.Printf("[sync] GET /agent/sync/screenshots/upload-url read body error: %v", readErr)
+		return "", "", readErr
 	}
 
 	var result struct {
@@ -242,14 +270,32 @@ func (c *Client) GetPresignedUploadURL(filename string) (uploadURL, s3Key string
 			UploadURL string `json:"uploadUrl"`
 			S3Key     string `json:"s3Key"`
 		} `json:"data"`
+		// Legacy flat format (pre-`data:` wrapper fix) — fall back to this if present.
+		UploadURL string `json:"uploadUrl"`
+		S3Key     string `json:"s3Key"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(bodyBytes, &result); err != nil {
+		c.recordFailure()
+		log.Printf("[sync] GET /agent/sync/screenshots/upload-url decode error: %v (body=%s)", err, strings.TrimSpace(string(bodyBytes)))
 		return "", "", err
 	}
-	if result.Data.UploadURL == "" {
+
+	// Prefer the wrapped format, fall back to the flat format if the API is stale.
+	uploadURL = result.Data.UploadURL
+	s3Key = result.Data.S3Key
+	if uploadURL == "" && result.UploadURL != "" {
+		uploadURL = result.UploadURL
+		s3Key = result.S3Key
+		log.Printf("[sync] GET /agent/sync/screenshots/upload-url — API returned flat format (needs restart to pick up data: wrapper)")
+	}
+
+	if uploadURL == "" {
+		c.recordFailure()
+		log.Printf("[sync] GET /agent/sync/screenshots/upload-url returned empty uploadUrl (body=%s)", strings.TrimSpace(string(bodyBytes)))
 		return "", "", fmt.Errorf("presign URL response contained empty uploadUrl")
 	}
-	return result.Data.UploadURL, result.Data.S3Key, nil
+	c.recordSuccess()
+	return uploadURL, s3Key, nil
 }
 
 // PostBestEffort sends a single fire-and-forget POST that does NOT affect the
@@ -286,9 +332,14 @@ func (c *Client) SaveScreenshotMeta(s3Key string, capturedAt time.Time, fileSize
 	return c.Post("/agent/sync/screenshots", body)
 }
 
-// Heartbeat pings the API to update last_seen_at for this device.
-func (c *Client) Heartbeat() error {
-	return c.Post("/agent/sync/heartbeat", struct{}{})
+// Heartbeat pings the API to update last_seen_at for this device and
+// reports the agent's current AFK (idle) state so the live-monitoring
+// dashboard can transition users to the idle badge without waiting on
+// activity-event frequency.
+func (c *Client) Heartbeat(idle bool) error {
+	return c.Post("/agent/sync/heartbeat", struct {
+		Idle bool `json:"idle"`
+	}{Idle: idle})
 }
 
 // OrgStreamConfig holds streaming configuration from the server.
@@ -298,6 +349,51 @@ type OrgStreamConfig struct {
 	CameraEnabled         bool `json:"cameraEnabled"`
 	AudioEnabled          bool `json:"audioEnabled"`
 	MaxStreamFPS          int  `json:"maxStreamFps"`
+}
+
+// AgentCommands is the shape of the command-poll response.
+// Used to receive out-of-band instructions from the API without requiring
+// a persistent WebSocket connection. Polled every 2s by the agent.
+type AgentCommands struct {
+	// LiveView is true when a manager is actively watching this employee's
+	// live screen feed. The agent enters burst-capture mode while this is
+	// true and reverts to the normal screenshot interval when it goes false.
+	LiveView bool `json:"liveView"`
+}
+
+// FetchCommands polls the API for out-of-band instructions.
+// Intentionally bypasses the circuit breaker and uses a tight timeout so it
+// never delays the main event loop even if the API is slow.
+func (c *Client) FetchCommands() (*AgentCommands, error) {
+	req, err := http.NewRequest(http.MethodGet, c.baseURL+"/agent/sync/commands", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("X-Agent-Version", agentVersion)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("commands HTTP %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Data AgentCommands `json:"data"`
+		// Fall back if the API ever drops the interceptor wrapper.
+		LiveView bool `json:"liveView"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	cmds := result.Data
+	if !cmds.LiveView && result.LiveView {
+		cmds.LiveView = result.LiveView
+	}
+	return &cmds, nil
 }
 
 // FetchOrgConfig fetches organization config including streaming settings.
@@ -366,6 +462,37 @@ func (c *Client) ResetCircuit() {
 	c.state = stateClosed
 	c.failures = 0
 	c.resetTimeout = circuitResetAfter
+}
+
+// CircuitSnapshot is a read-only view of the breaker state for /health and tray.
+type CircuitSnapshot struct {
+	State        string        // "closed", "open", "half-open"
+	Failures     int           // consecutive failures (0 when closed)
+	OpenedAt     time.Time     // zero value if not currently open
+	ResetTimeout time.Duration // current backoff window
+}
+
+// State returns a snapshot of the circuit breaker state. Safe to call from any goroutine.
+func (c *Client) State() CircuitSnapshot {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var name string
+	switch c.state {
+	case stateClosed:
+		name = "closed"
+	case stateOpen:
+		name = "open"
+	case stateHalfOpen:
+		name = "half-open"
+	default:
+		name = "unknown"
+	}
+	return CircuitSnapshot{
+		State:        name,
+		Failures:     c.failures,
+		OpenedAt:     c.openedAt,
+		ResetTimeout: c.resetTimeout,
+	}
 }
 
 // agentVersion is embedded at build time via -ldflags "-X ...agentVersion=x.y.z".

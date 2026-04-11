@@ -13,6 +13,8 @@ export class AgentRegistrationController {
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Register desktop agent device using an invite token' })
   async register(@Body() dto: RegisterAgentDto) {
+    // Return flat — the global TransformInterceptor wraps every response in
+    // { success, data, timestamp }. Hand-wrapping in `data:` causes double nesting.
     const { agentToken, employeeId, orgId } = await this.service.registerAgent(dto);
     return { agentToken, employeeId, orgId };
   }

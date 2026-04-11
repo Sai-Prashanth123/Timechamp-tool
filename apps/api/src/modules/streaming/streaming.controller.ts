@@ -22,12 +22,18 @@ import {
 } from '@nestjs/swagger';
 import { StreamingService } from './streaming.service';
 import { StreamingGateway } from './streaming.gateway';
+import { LiveWatchCache } from './live-watch-cache.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { User, UserRole } from '../../database/entities/user.entity';
 import { StreamMode } from '../../database/entities/stream-session.entity';
+
+// TTL for the live-view watch flag. Must be longer than the browser's refresh
+// cadence (20s) to avoid a window where the agent thinks no one is watching.
+// 60s gives a healthy safety margin.
+const WATCH_FLAG_TTL_SECONDS = 60;
 
 class UpdateModeDto {
   mode: StreamMode;
@@ -49,6 +55,7 @@ export class StreamingController {
   constructor(
     private readonly streamingService: StreamingService,
     private readonly streamingGateway: StreamingGateway,
+    private readonly liveWatchCache: LiveWatchCache,
   ) {}
 
   @Get('sessions')
@@ -118,40 +125,43 @@ export class StreamingController {
   @Post('request/:userId')
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
   @HttpCode(HttpStatus.ACCEPTED)
-  @ApiOperation({ summary: 'Request on-demand stream from agent' })
+  @ApiOperation({
+    summary: 'Request on-demand live view from agent (polling-based covert mode)',
+  })
   async requestStream(
     @Param('userId') userId: string,
     @CurrentUser() user: User,
   ): Promise<{ accepted: boolean; userId: string }> {
-    const sent = this.streamingGateway.sendControlToAgent(userId, {
+    // Set the live-view watch flag in the in-process cache with a short TTL.
+    // The agent polls GET /agent/sync/commands every 2 seconds; when it sees
+    // this flag set it enters burst capture mode and uploads screenshots at
+    // 1 FPS via the existing Supabase pipeline. The browser must re-call this
+    // endpoint every ~20s while watching to keep the TTL fresh.
+    this.liveWatchCache.markWatched(userId, WATCH_FLAG_TTL_SECONDS);
+
+    // Also fire the legacy Socket.io control frame — no-op if the agent isn't
+    // a Socket.io client, but kept for forward-compat when a proper video
+    // streaming client is added later.
+    this.streamingGateway.sendControlToAgent(userId, {
       action: 'start_stream',
       requestedBy: user.id,
     });
-    if (!sent) {
-      const session = await this.streamingService.getSessionByUserId(userId);
-      if (!session) {
-        throw new NotFoundException(`Agent for user ${userId} is not currently connected`);
-      }
-      this.streamingGateway.sendControlToAgent(userId, { action: 'start_stream', requestedBy: user.id });
-    }
     return { accepted: true, userId };
   }
 
   @Post('request/:userId/stop')
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
   @HttpCode(HttpStatus.ACCEPTED)
-  @ApiOperation({ summary: 'Stop on-demand stream for agent' })
+  @ApiOperation({ summary: 'Stop on-demand live view for agent' })
   async stopStream(
     @Param('userId') userId: string,
     @CurrentUser() user: User,
   ): Promise<{ accepted: boolean; userId: string }> {
-    const sent = this.streamingGateway.sendControlToAgent(userId, {
+    this.liveWatchCache.clearWatched(userId);
+    this.streamingGateway.sendControlToAgent(userId, {
       action: 'stop_stream',
       requestedBy: user.id,
     });
-    if (!sent) {
-      throw new NotFoundException(`Agent for user ${userId} is not currently connected`);
-    }
     return { accepted: true, userId };
   }
 }

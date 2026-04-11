@@ -21,6 +21,10 @@ type Metrics struct {
 	HasAccessibility   bool
 	URLDetectionLayer  int32
 	DroppedEvents      uint64
+	// Circuit breaker observability — populated from sync.Client.State().
+	CircuitState    string    // "closed" | "open" | "half-open"
+	CircuitOpenedAt time.Time // zero if not open
+	CircuitFailures int
 }
 
 // Server exposes a local HTTP /health endpoint for liveness checks.
@@ -45,6 +49,9 @@ type Response struct {
 	HasAccessibility   bool      `json:"has_accessibility"`
 	URLDetectionLayer  int32     `json:"url_detection_layer"`
 	DroppedEvents      uint64    `json:"dropped_events"`
+	CircuitState       string    `json:"circuit_state"`
+	CircuitOpenedAt    time.Time `json:"circuit_opened_at,omitempty"`
+	CircuitFailures    int       `json:"circuit_failures"`
 }
 
 func New(version string) *Server {
@@ -101,5 +108,8 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		HasAccessibility:   m.HasAccessibility,
 		URLDetectionLayer:  m.URLDetectionLayer,
 		DroppedEvents:      m.DroppedEvents,
+		CircuitState:       m.CircuitState,
+		CircuitOpenedAt:    m.CircuitOpenedAt,
+		CircuitFailures:    m.CircuitFailures,
 	})
 }
