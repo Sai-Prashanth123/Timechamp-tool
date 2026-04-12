@@ -7,4 +7,4 @@ export function GetStatus():Promise<Record<string, any>>;
 
 export function Ping(arg1:string):Promise<void>;
 
-export function Register(arg1:string,arg2:string):Promise<void>;
+export function Register(arg1:string,arg2:string,arg3:string):Promise<void>;

@@ -92,6 +92,7 @@ func main() {
 			apiURL = cfg.APIURL
 		}
 		token := r.URL.Query().Get("token")
+		displayName := r.URL.Query().Get("name")
 
 		send := func(step, msg string) {
 			data, _ := json.Marshal(map[string]string{"step": step, "msg": msg})
@@ -121,14 +122,29 @@ func main() {
 		}
 
 		// ── Step: register ───────────────────────────────────────────────────
+		// Use the new personal-token flow when the user entered a display
+		// name (always, from the updated UI). Fallback to legacy invite-token
+		// flow kept for any older frontends that don't send `name`.
 		send("register", "Registering device…")
 		hostname, _ := os.Hostname()
-		agentToken, employeeID, orgID, regErr := agentsync.Register(
-			apiURL, token, hostname, runtime.GOOS, runtime.GOARCH,
+		var (
+			agentToken string
+			employeeID string
+			orgID      string
+			regErr     error
 		)
+		if displayName != "" {
+			agentToken, employeeID, orgID, regErr = agentsync.RegisterWithPersonalToken(
+				apiURL, token, displayName, hostname, runtime.GOOS, runtime.GOARCH,
+			)
+		} else {
+			agentToken, employeeID, orgID, regErr = agentsync.Register(
+				apiURL, token, hostname, runtime.GOOS, runtime.GOARCH,
+			)
+		}
 		if regErr != nil {
 			sendErr("register",
-				"Invite token is invalid or already used. Generate a new one in the dashboard.")
+				"Token is invalid or has been rotated. Copy a fresh one from Dashboard → Settings → Agent Setup.")
 			return
 		}
 

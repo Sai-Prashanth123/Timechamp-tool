@@ -20,6 +20,8 @@ import {
   ApiParam,
   ApiBody,
 } from '@nestjs/swagger';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { StreamingService } from './streaming.service';
 import { StreamingGateway } from './streaming.gateway';
 import { LiveWatchCache } from './live-watch-cache.service';
@@ -28,6 +30,7 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { User, UserRole } from '../../database/entities/user.entity';
+import { AgentDevice } from '../../database/entities/agent-device.entity';
 import { StreamMode } from '../../database/entities/stream-session.entity';
 
 // TTL for the live-view watch flag. Must be longer than the browser's refresh
@@ -56,6 +59,8 @@ export class StreamingController {
     private readonly streamingService: StreamingService,
     private readonly streamingGateway: StreamingGateway,
     private readonly liveWatchCache: LiveWatchCache,
+    @InjectRepository(AgentDevice)
+    private readonly deviceRepo: Repository<AgentDevice>,
   ) {}
 
   @Get('sessions')
@@ -122,42 +127,107 @@ export class StreamingController {
     return this.streamingService.updateOrgStreamingConfig(user.organizationId, body);
   }
 
+  // ── Device-scoped live watch ─────────────────────────────────────────
+  //
+  // The /live page requests watching a SPECIFIC device (AMMA vs DEV-MACHINE)
+  // so the LiveWatchCache flags only that one agent. The agent polls
+  // /agent/sync/commands and enters burst mode only when its own flag is set.
+
+  @Post('request/device/:deviceId')
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: 'Request on-demand live view for a specific agent device',
+  })
+  async requestStreamByDevice(
+    @Param('deviceId') deviceId: string,
+    @CurrentUser() user: User,
+  ): Promise<{ accepted: boolean; userId: string; deviceId: string }> {
+    const device = await this.deviceRepo.findOne({
+      where: { id: deviceId, organizationId: user.organizationId },
+    });
+    if (!device) throw new NotFoundException('Device not found');
+
+    this.liveWatchCache.markWatched(device.userId, device.id, WATCH_FLAG_TTL_SECONDS);
+    this.streamingGateway.sendControlToAgent(device.userId, {
+      action: 'start_stream',
+      requestedBy: user.id,
+    });
+    return { accepted: true, userId: device.userId, deviceId: device.id };
+  }
+
+  @Post('request/device/:deviceId/stop')
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({ summary: 'Stop on-demand live view for a specific agent device' })
+  async stopStreamByDevice(
+    @Param('deviceId') deviceId: string,
+    @CurrentUser() user: User,
+  ): Promise<{ accepted: boolean; userId: string; deviceId: string }> {
+    const device = await this.deviceRepo.findOne({
+      where: { id: deviceId, organizationId: user.organizationId },
+    });
+    if (!device) throw new NotFoundException('Device not found');
+
+    this.liveWatchCache.clearWatched(device.userId, device.id);
+    this.streamingGateway.sendControlToAgent(device.userId, {
+      action: 'stop_stream',
+      requestedBy: user.id,
+    });
+    return { accepted: true, userId: device.userId, deviceId: device.id };
+  }
+
+  // ── Legacy user-scoped live watch ────────────────────────────────────
+  //
+  // Kept for /monitoring/[userId] which is user-centric by design. Internally
+  // it now picks the user's most recently seen active device and flags just
+  // that one — so a user with two devices only bursts the most recent one.
+  // If a caller needs to target a specific device, use the /request/device/
+  // routes above.
+
   @Post('request/:userId')
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
-    summary: 'Request on-demand live view from agent (polling-based covert mode)',
+    summary: 'Request on-demand live view by userId (legacy — picks most recent device)',
   })
   async requestStream(
     @Param('userId') userId: string,
     @CurrentUser() user: User,
-  ): Promise<{ accepted: boolean; userId: string }> {
-    // Set the live-view watch flag in the in-process cache with a short TTL.
-    // The agent polls GET /agent/sync/commands every 2 seconds; when it sees
-    // this flag set it enters burst capture mode and uploads screenshots at
-    // 1 FPS via the existing Supabase pipeline. The browser must re-call this
-    // endpoint every ~20s while watching to keep the TTL fresh.
-    this.liveWatchCache.markWatched(userId, WATCH_FLAG_TTL_SECONDS);
-
-    // Also fire the legacy Socket.io control frame — no-op if the agent isn't
-    // a Socket.io client, but kept for forward-compat when a proper video
-    // streaming client is added later.
+  ): Promise<{ accepted: boolean; userId: string; deviceId?: string }> {
+    const device = await this.deviceRepo.findOne({
+      where: { userId, organizationId: user.organizationId, isActive: true },
+      order: { lastSeenAt: 'DESC' },
+    });
+    if (!device) {
+      // No active device — still accept the request so the frontend's
+      // flow doesn't break, but nothing to flag in the cache.
+      return { accepted: true, userId };
+    }
+    this.liveWatchCache.markWatched(userId, device.id, WATCH_FLAG_TTL_SECONDS);
     this.streamingGateway.sendControlToAgent(userId, {
       action: 'start_stream',
       requestedBy: user.id,
     });
-    return { accepted: true, userId };
+    return { accepted: true, userId, deviceId: device.id };
   }
 
   @Post('request/:userId/stop')
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
   @HttpCode(HttpStatus.ACCEPTED)
-  @ApiOperation({ summary: 'Stop on-demand live view for agent' })
+  @ApiOperation({ summary: 'Stop on-demand live view by userId (legacy)' })
   async stopStream(
     @Param('userId') userId: string,
     @CurrentUser() user: User,
   ): Promise<{ accepted: boolean; userId: string }> {
-    this.liveWatchCache.clearWatched(userId);
+    // Clear any device for this user that might be in burst mode.
+    const devices = await this.deviceRepo.find({
+      where: { userId, organizationId: user.organizationId, isActive: true },
+      select: ['id'],
+    });
+    for (const d of devices) {
+      this.liveWatchCache.clearWatched(userId, d.id);
+    }
     this.streamingGateway.sendControlToAgent(userId, {
       action: 'stop_stream',
       requestedBy: user.id,

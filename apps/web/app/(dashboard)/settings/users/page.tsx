@@ -138,6 +138,9 @@ export default function UsersSettingsPage() {
                         Role
                       </th>
                       <th className="text-left p-4 text-sm font-medium text-slate-600">
+                        Agents
+                      </th>
+                      <th className="text-left p-4 text-sm font-medium text-slate-600">
                         Status
                       </th>
                     </tr>
@@ -161,6 +164,17 @@ export default function UsersSettingsPage() {
                             className={`px-2 py-0.5 rounded text-xs font-medium ${roleColors[user.role] ?? ''}`}
                           >
                             {user.role}
+                          </span>
+                        </td>
+                        <td className="p-4">
+                          <span
+                            className={`px-2 py-0.5 rounded text-xs font-medium ${
+                              user.deviceCount > 0
+                                ? 'bg-blue-100 text-blue-700'
+                                : 'bg-slate-100 text-slate-500'
+                            }`}
+                          >
+                            {user.deviceCount} {user.deviceCount === 1 ? 'agent' : 'agents'}
                           </span>
                         </td>
                         <td className="p-4">

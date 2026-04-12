@@ -6,7 +6,7 @@ param(
     [string]$InviteToken,
 
     [string]$InstallDir = "$env:ProgramFiles\TimeChamp",
-    [string]$ApiUrl = "https://api.timechamp.io/api/v1"
+    [string]$ApiUrl = "https://timechamp-api-fgasejh3f0a7gxgk.eastasia-01.azurewebsites.net/api/v1"
 )
 
 $ErrorActionPreference = "Stop"

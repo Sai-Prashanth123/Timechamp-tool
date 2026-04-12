@@ -3,10 +3,17 @@ import api from '@/lib/api';
 
 // ── Types ──────────────────────────────────────────────────────────────
 
-export type LiveEmployee = {
+/**
+ * One row per live agent device — NOT per user. A single user can own
+ * multiple machines and each renders as its own card on the dashboard.
+ * Backend shape is defined by `LiveDevice` in monitoring.service.ts.
+ */
+export type LiveDevice = {
+  deviceId: string;
   userId: string;
-  firstName: string;
-  lastName: string;
+  userName: string;              // firstName + lastName, pre-joined by API
+  displayName: string | null;    // user-entered label ("Sai's Laptop")
+  hostname: string | null;       // fallback when displayName is null
   clockedInSince: string;
   currentApp: string | null;
   lastSeenAt: string | null;
@@ -38,7 +45,7 @@ export function useLiveStatus() {
     queryKey: ['monitoring-live'],
     queryFn: async () => {
       const { data } = await api.get('/monitoring/live');
-      return data.data as LiveEmployee[];
+      return data.data as LiveDevice[];
     },
     refetchInterval: 30_000,
   });
@@ -48,6 +55,7 @@ export function useLiveStatus() {
 
 export function useActivity(params?: {
   userId?: string;
+  deviceId?: string;
   from?: string;
   to?: string;
 }) {
@@ -64,6 +72,7 @@ export function useActivity(params?: {
 
 export function useScreenshots(params?: {
   userId?: string;
+  deviceId?: string;
   from?: string;
   to?: string;
 }) {

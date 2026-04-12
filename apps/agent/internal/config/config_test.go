@@ -14,7 +14,7 @@ func TestLoad_Defaults(t *testing.T) {
 
 	cfg := config.Load()
 
-	if cfg.APIURL != "https://api.timechamp.io/api/v1" {
+	if cfg.APIURL != "https://timechamp-api-fgasejh3f0a7gxgk.eastasia-01.azurewebsites.net/api/v1" {
 		t.Errorf("expected default API URL, got %q", cfg.APIURL)
 	}
 	if cfg.ScreenshotInterval != 300 {

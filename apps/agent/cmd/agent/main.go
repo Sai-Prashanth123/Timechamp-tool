@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	stdsync "sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -157,6 +158,15 @@ func run() {
 		cfg.OrgID = orgID
 		cfg.EmployeeID = employeeID
 	}
+
+	// R7: ensure auto-start at user login. Platform-specific implementation:
+	//   - macOS:   writes ~/Library/LaunchAgents/com.timechamp.agent.plist
+	//   - Windows: no-op (the tray handles it via cmd/tray/autostart_windows.go)
+	//   - Linux:   no-op (init system varies; manual systemd user unit recommended)
+	// Idempotent on all platforms — safe to call on every launch. Failures are
+	// logged but never block startup. Called AFTER successful token load so we
+	// only auto-register a binary that has a valid identity and won't fatal-loop.
+	ensureAutoStart()
 
 	// Crash reporter: catches panics, sends stack trace to API, then re-panics.
 	// Must be deferred AFTER identity is loaded so org/employee IDs are available.
@@ -366,11 +376,14 @@ func run() {
 	pruneTicker        := time.NewTicker(24 * time.Hour)
 	telemetryTicker    := time.NewTicker(60 * time.Second)
 	idleTicker         := time.NewTicker(1 * time.Second)
-	// Live-view command poll — every 2s the agent asks the API whether a
+	// Live-view command poll — every 1s the agent asks the API whether a
 	// manager is currently watching its live feed. When true, enters burst
-	// capture mode. Deliberately short interval so Watch Live feels snappy.
-	commandTicker := time.NewTicker(2 * time.Second)
-	// Burst capture ticker — 1 FPS screenshots when in live-view mode. Starts
+	// capture mode. 1s is the lowest cadence that's still cheap (single
+	// JSON GET returning a boolean) and keeps the worst-case startup delay
+	// for Watch Live under ~1s — half the old 2s budget, which is the
+	// difference between "feels instant" and "feels laggy".
+	commandTicker := time.NewTicker(1 * time.Second)
+	// Burst capture ticker — 2 FPS screenshots when in live-view mode. Starts
 	// stopped (period 24h as a no-op placeholder); Reset() activates it on
 	// enter / Stop() deactivates it on exit.
 	burstTicker := time.NewTicker(24 * time.Hour)
@@ -410,6 +423,17 @@ func run() {
 		lastSyncSuccess   bool
 		lastSyncLatencyMs int64
 		syncErrorCount    int
+		// Rate-limit state for the "circuit open, sync skipped" observability
+		// log. Without this, long outages leave agent.log completely silent —
+		// operators can't distinguish "idle, nothing to sync" from "stuck,
+		// API unreachable for 40 minutes". We log at most once per minute.
+		lastCircuitLogAt time.Time
+		// Rate-limit state for the [commands] FetchCommands failure log. The
+		// command poll fires every 2 seconds, so without rate-limiting an
+		// extended outage produces hundreds of identical lines per minute and
+		// drowns out everything useful in agent.log. Same once-per-minute cap
+		// as lastCircuitLogAt.
+		lastCommandLogAt time.Time
 	)
 
 	inputCounter := &capture.InputCounter{}
@@ -608,12 +632,28 @@ func run() {
 		case <-commandTicker.C:
 			withRecover("command-poll", crashReporter, func() {
 				cmds, err := client.FetchCommands()
-				if err != nil || cmds == nil {
+				if err != nil {
+					// Rate-limited to once per minute. The 2s poll cadence
+					// would otherwise spam ~30 identical lines per minute
+					// during any outage and drown out everything else.
+					if time.Since(lastCommandLogAt) > 60*time.Second {
+						log.Printf("[commands] FetchCommands failed: %v", err)
+						lastCommandLogAt = time.Now()
+					}
+					return
+				}
+				if cmds == nil {
 					return
 				}
 				if cmds.LiveView && !liveViewOn {
 					liveViewOn = true
-					burstTicker.Reset(1 * time.Second)
+					// 2 FPS — fast enough to feel like a live stream while
+					// keeping Supabase row churn and upload bandwidth sane.
+					// The browser consumes each frame via the monitoring WS
+					// (`employee:screenshot` event carries the presigned URL)
+					// so the viewer sees every frame as soon as saveScreenshot
+					// lands in the DB — no polling jitter.
+					burstTicker.Reset(500 * time.Millisecond)
 				} else if !cmds.LiveView && liveViewOn {
 					liveViewOn = false
 					burstTicker.Stop()
@@ -693,16 +733,39 @@ func run() {
 		case <-syncTicker.C:
 			withRecover("sync-tick", crashReporter, func() {
 				if !client.IsAvailable() {
+					// Rate-limited observability log — at most one line per
+					// minute during an extended outage, so operators reading
+					// agent.log can tell "stuck on circuit open" from "idle".
+					if time.Since(lastCircuitLogAt) > 60*time.Second {
+						cb := client.State()
+						buffered, _ := db.CountActivity()
+						log.Printf("[sync] skipped: circuit=%s failures=%d buffered=%d",
+							cb.State, cb.Failures, buffered)
+						lastCircuitLogAt = time.Now()
+					}
 					return // was: continue
 				}
 				// Flush heartbeat queue to SQLite first.
 				hq.FlushAll()
 
 				syncStart := time.Now()
-				n1, err1 := uploader.FlushActivity()
-				n2, err2 := uploader.FlushKeystrokes()
-				n3, err3 := uploader.FlushScreenshots()
-				n4, err4 := uploader.FlushMetrics()
+				// Run all four flush operations in parallel goroutines.
+				// Sequentially each flush blocks for the duration of its
+				// HTTP round-trip; in parallel they overlap, cutting wall-
+				// clock latency from sum-of-all-four to max-of-all-four.
+				// Each Flush* method is independently safe — they read
+				// disjoint buffer rows and write to different API endpoints.
+				var (
+					n1, n2, n3, n4         int
+					err1, err2, err3, err4 error
+					wg                     stdsync.WaitGroup
+				)
+				wg.Add(4)
+				go func() { defer wg.Done(); n1, err1 = uploader.FlushActivity() }()
+				go func() { defer wg.Done(); n2, err2 = uploader.FlushKeystrokes() }()
+				go func() { defer wg.Done(); n3, err3 = uploader.FlushScreenshots() }()
+				go func() { defer wg.Done(); n4, err4 = uploader.FlushMetrics() }()
+				wg.Wait()
 				if err1 != nil || err2 != nil || err3 != nil || err4 != nil {
 					log.Printf("Sync errors: activity=%v keystrokes=%v screenshots=%v metrics=%v",
 						err1, err2, err3, err4)
@@ -762,8 +825,12 @@ func run() {
 					return // was: continue
 				}
 				newOrgCfg, err := client.FetchOrgConfig()
-				if err != nil || newOrgCfg == nil {
-					return // was: continue
+				if err != nil {
+					log.Printf("[config] FetchOrgConfig failed: %v", err)
+					return
+				}
+				if newOrgCfg == nil {
+					return
 				}
 				if newOrgCfg.ScreenshotIntervalSec > 0 &&
 					newOrgCfg.ScreenshotIntervalSec != cfg.ScreenshotInterval {

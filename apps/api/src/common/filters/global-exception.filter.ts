@@ -29,11 +29,22 @@ export class GlobalExceptionFilter implements ExceptionFilter {
           : (res as any).message ?? 'Internal server error';
     }
 
-    // Log internally — never expose stack traces to clients
-    this.logger.error(
-      `${request.method} ${request.url} → ${status}`,
-      exception instanceof Error ? exception.stack : String(exception),
-    );
+    // Log internally — never expose stack traces to clients.
+    //
+    // 404s are almost always bot scans, Azure platform probes
+    // (/robots933456.txt, /favicon.ico, /health, /), or stale clients
+    // hitting retired routes. They are not actionable errors and should
+    // not pollute production logs with stack traces. Downgrade to a
+    // single-line `warn` with no stack. Real errors (5xx, 4xx other than
+    // 404) still get full stack trace logging.
+    if (status === HttpStatus.NOT_FOUND) {
+      this.logger.warn(`${request.method} ${request.url} → 404`);
+    } else {
+      this.logger.error(
+        `${request.method} ${request.url} → ${status}`,
+        exception instanceof Error ? exception.stack : String(exception),
+      );
+    }
 
     response.status(status).json({
       success: false,

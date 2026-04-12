@@ -52,7 +52,10 @@ type Config struct {
 // Load reads configuration from environment variables, falling back to defaults.
 func Load() *Config {
 	return &Config{
-		APIURL:             getEnv("TC_API_URL", "https://api.timechamp.io/api/v1"),
+		// Default API URL — Azure App Service deployment. Override per-device
+		// via the TC_API_URL env var, or per-install via identity.json's
+		// apiUrl field (written by the tray/setup UI at registration time).
+		APIURL: getEnv("TC_API_URL", "https://timechamp-api-fgasejh3f0a7gxgk.eastasia-01.azurewebsites.net/api/v1"),
 		OrgID:              getEnv("TC_ORG_ID", ""),
 		ScreenshotInterval: getEnvPositiveInt("TC_SCREENSHOT_INTERVAL", 300),
 		SyncInterval:       getEnvPositiveInt("TC_SYNC_INTERVAL", 30),

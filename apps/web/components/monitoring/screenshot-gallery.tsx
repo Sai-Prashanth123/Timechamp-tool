@@ -8,12 +8,13 @@ import { X } from 'lucide-react';
 
 interface Props {
   userId?: string;
+  deviceId?: string;
   from?: string;
   to?: string;
 }
 
-export function ScreenshotGallery({ userId, from, to }: Props) {
-  const { data: screenshots = [], isLoading } = useScreenshots({ userId, from, to });
+export function ScreenshotGallery({ userId, deviceId, from, to }: Props) {
+  const { data: screenshots = [], isLoading } = useScreenshots({ userId, deviceId, from, to });
   const [lightbox, setLightbox] = useState<string | null>(null);
 
   if (isLoading) {

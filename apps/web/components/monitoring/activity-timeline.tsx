@@ -28,12 +28,13 @@ function fmtDuration(sec: number): string {
 
 interface Props {
   userId?: string;
+  deviceId?: string;
   from?: string;
   to?: string;
 }
 
-export function ActivityTimeline({ userId, from, to }: Props) {
-  const { data: events = [], isLoading } = useActivity({ userId, from, to });
+export function ActivityTimeline({ userId, deviceId, from, to }: Props) {
+  const { data: events = [], isLoading } = useActivity({ userId, deviceId, from, to });
 
   if (isLoading) {
     return (

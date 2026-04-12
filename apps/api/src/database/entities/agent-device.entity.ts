@@ -26,6 +26,12 @@ export class AgentDevice {
   @Column({ type: 'varchar', nullable: true })
   hostname: string | null;
 
+  // Human-chosen label shown on the admin dashboard. The agent setup UI
+  // asks for this at registration and stores it here; older agents that
+  // don't send the field leave it null and we fall back to `hostname`.
+  @Column({ name: 'display_name', type: 'varchar', length: 255, nullable: true })
+  displayName: string | null;
+
   @Column({ type: 'varchar', nullable: true })
   platform: string | null;
 

@@ -5,6 +5,13 @@ import { AgentRegistrationController } from './agent-registration.controller';
 import { AgentManagementController } from './agent-management.controller';
 import { AgentService } from './agent.service';
 import { AgentAuthGuard } from './agent-auth.guard';
+import { HeartbeatBufferService } from './heartbeat-buffer.service';
+import { ActivityQueueService } from './activity-queue.service';
+import { ActivityWorkerService } from './activity-worker.service';
+import { MetricsQueueService } from './metrics-queue.service';
+import { MetricsWorkerService } from './metrics-worker.service';
+import { KeystrokesQueueService } from './keystrokes-queue.service';
+import { KeystrokesWorkerService } from './keystrokes-worker.service';
 import { TokenService } from '../../infrastructure/token/token.service';
 import { ActivityEvent } from '../../database/entities/activity-event.entity';
 import { Screenshot } from '../../database/entities/screenshot.entity';
@@ -16,6 +23,7 @@ import { AgentMetric } from '../../database/entities/agent-metric.entity';
 import { KeystrokeEvent } from '../../database/entities/keystroke-event.entity';
 import { AgentTelemetry } from '../../database/entities/agent-telemetry.entity';
 import { MonitoringModule } from '../monitoring/monitoring.module';
+import { UsersModule } from '../users/users.module';
 
 @Module({
   imports: [
@@ -24,9 +32,21 @@ import { MonitoringModule } from '../monitoring/monitoring.module';
       KeystrokeEvent, AgentTelemetry,
     ]),
     forwardRef(() => MonitoringModule),
+    UsersModule,
   ],
   controllers: [AgentController, AgentRegistrationController, AgentManagementController],
-  providers: [AgentService, AgentAuthGuard, TokenService],
+  providers: [
+    AgentService,
+    AgentAuthGuard,
+    HeartbeatBufferService,
+    ActivityQueueService,
+    ActivityWorkerService,
+    MetricsQueueService,
+    MetricsWorkerService,
+    KeystrokesQueueService,
+    KeystrokesWorkerService,
+    TokenService,
+  ],
   exports: [AgentService],
 })
 export class AgentModule {}

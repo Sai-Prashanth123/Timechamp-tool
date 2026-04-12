@@ -9,6 +9,14 @@ const mockUserRepo = {
   findOne: jest.fn(),
 };
 
+// Round 5 / R5.2 added a Redis cache. Default mock returns null (cache miss)
+// so every test exercises the full DB path. Individual tests can override.
+const mockRedis = {
+  get: jest.fn().mockResolvedValue(null),
+  set: jest.fn().mockResolvedValue(undefined),
+  del: jest.fn().mockResolvedValue(undefined),
+};
+
 const mockDevice = { userId: 'user-123' };
 const mockUser = { id: 'user-123', isActive: true };
 
@@ -25,9 +33,11 @@ describe('AgentAuthGuard', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockRedis.get.mockResolvedValue(null); // default: cache miss
     guard = new AgentAuthGuard(
       mockAgentService as any,
       mockUserRepo as any,
+      mockRedis as any,
     );
   });
 

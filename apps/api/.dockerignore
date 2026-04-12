@@ -1,0 +1,48 @@
+# =============================================================================
+# Docker build context exclusions
+# =============================================================================
+# Anything listed here is NOT sent to the Docker daemon when building, which:
+#   - keeps the build context small (faster `docker build`)
+#   - prevents host-only artifacts from leaking into image layers
+#   - avoids cache busts when irrelevant files change on the host
+#
+# The Dockerfile only COPYs package.json, package-lock.json, tsconfig.json,
+# nest-cli.json, and src/ — everything else is noise.
+# =============================================================================
+
+# Local dependencies (the deps stage runs `npm ci` from the lockfile)
+node_modules
+npm-debug.log
+
+# Build outputs (the build stage runs `npx nest build` fresh inside the image)
+dist
+*.tsbuildinfo
+
+# Local environment files — secrets are baked into the Dockerfile via ENV
+# directives, so the .env file itself must NOT be in the image
+.env
+.env.*
+!.env.example
+
+# Editor / IDE
+.vscode
+.idea
+*.swp
+.DS_Store
+
+# Git metadata — never needed at runtime
+.git
+.gitignore
+
+# Docker meta — don't recursively include the Dockerfile in the context
+Dockerfile
+.dockerignore
+
+# Test / coverage artifacts
+coverage
+.nyc_output
+*.log
+
+# Local data / uploads (if any get created during dev)
+uploads
+tmp

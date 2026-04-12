@@ -51,6 +51,19 @@ func main() {
 		os.Exit(0)
 	}
 
+	// R6.1: Self-register in HKCU\Software\Microsoft\Windows\CurrentVersion\Run
+	// so the tray auto-launches at every user login. Idempotent — costs ~1ms
+	// on subsequent launches when the entry is already correct. Failures are
+	// logged but never block startup; auto-start is a convenience feature.
+	ensureAutoStart()
+
+	// R6.4: Belt-and-braces Task Scheduler entry with two extra triggers that
+	// HKCU Run can't express:
+	//   - SessionUnlock (catches wake-from-sleep + manual unlock)
+	//   - RestartOnFailure (relaunches the tray if it crashes mid-session)
+	// Per-user task — no UAC. Idempotent. Failures non-fatal.
+	ensureScheduledTask()
+
 	app := NewApp(agentBinary)
 
 	// System tray runs in its own goroutine — energye/systray is safe to call

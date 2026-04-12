@@ -3,7 +3,8 @@ import CredentialsProvider from 'next-auth/providers/credentials';
 import axios from 'axios';
 
 const API_URL =
-  process.env.API_URL ?? 'http://localhost:3001/api/v1';
+  process.env.API_URL ??
+  'https://timechamp-api-fgasejh3f0a7gxgk.eastasia-01.azurewebsites.net/api/v1';
 
 async function refreshAccessToken(refreshToken: string) {
   try {

@@ -42,6 +42,22 @@ export class UsersController {
     return this.usersService.invite(user.organizationId, user.id, dto);
   }
 
+  // Personal agent token — any authenticated user may read/rotate their
+  // own. No @Roles() means RolesGuard passes through (see roles.guard.ts).
+  // Routes are placed before @Patch(':id') to keep the "me" path literal.
+  @Get('me/agent-token')
+  @ApiOperation({ summary: 'Get or generate the current user\'s personal agent token' })
+  getMyAgentToken(@CurrentUser() user: User) {
+    return this.usersService.getOrGenerateAgentToken(user.id);
+  }
+
+  @Post('me/agent-token/rotate')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Rotate the current user\'s personal agent token' })
+  rotateMyAgentToken(@CurrentUser() user: User) {
+    return this.usersService.rotateAgentToken(user.id);
+  }
+
   @Patch(':id')
   @Roles(UserRole.ADMIN)
   @ApiOperation({ summary: 'Update a user' })

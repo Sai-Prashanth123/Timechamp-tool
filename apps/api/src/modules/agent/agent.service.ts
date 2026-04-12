@@ -24,10 +24,15 @@ import { SyncGpsDto } from './dto/sync-gps.dto';
 import { SyncKeystrokesDto } from './dto/sync-keystrokes.dto';
 import { SyncTelemetryDto } from './dto/sync-telemetry.dto';
 import { HeartbeatDto } from './dto/heartbeat.dto';
+import { HeartbeatBufferService } from './heartbeat-buffer.service';
+import { ActivityQueueService } from './activity-queue.service';
+import { MetricsQueueService } from './metrics-queue.service';
+import { KeystrokesQueueService } from './keystrokes-queue.service';
 import { RegisterAgentDto } from './dto/register-agent.dto';
 import { CrashReportDto } from './dto/crash-report.dto';
 import { MonitoringGateway } from '../monitoring/monitoring.gateway';
 import { TokenService } from '../../infrastructure/token/token.service';
+import { UsersService } from '../users/users.service';
 
 @Injectable()
 export class AgentService implements OnModuleInit {
@@ -58,7 +63,12 @@ export class AgentService implements OnModuleInit {
     private keystrokeRepo: Repository<KeystrokeEvent>,
     @InjectRepository(AgentTelemetry)
     private telemetryRepo: Repository<AgentTelemetry>,
+    private heartbeatBuffer: HeartbeatBufferService,
+    private activityQueue: ActivityQueueService,
+    private metricsQueue: MetricsQueueService,
+    private keystrokesQueue: KeystrokesQueueService,
     private tokenService: TokenService,
+    private usersService: UsersService,
     @Optional() @Inject(forwardRef(() => MonitoringGateway))
     private monitoringGateway: MonitoringGateway | undefined,
   ) {
@@ -124,29 +134,54 @@ export class AgentService implements OnModuleInit {
     }
   }
 
-  async saveActivities(user: User, dto: SyncActivityDto): Promise<number> {
-    const entities = dto.events.map((e) =>
-      this.activityRepo.create({
-        userId: user.id,
-        organizationId: user.organizationId,
-        appName: e.appName.slice(0, 255),
-        windowTitle: e.windowTitle ? e.windowTitle.slice(0, 500) : null,
-        startedAt: new Date(e.startedAt),
-        durationSec: e.durationSec ?? Math.round((e.durationMs ?? 0) / 1000),
-        keystrokeCount: e.keystrokeCount ?? 0,
-      }),
-    );
-    await this.activityRepo.save(entities);
-    if (entities.length > 0) {
-      const latest = entities[entities.length - 1];
-      this.monitoringGateway?.emitActivityUpdate(user.organizationId, {
-        userId: user.id,
-        appName: latest.appName,
-        windowTitle: latest.windowTitle ?? null,
-        timestamp: latest.startedAt,
-      });
-    }
-    return entities.length;
+  async saveActivities(
+    user: User,
+    dto: SyncActivityDto,
+    deviceId?: string,
+  ): Promise<number> {
+    if (dto.events.length === 0) return 0;
+
+    // Enqueue the entire batch to pgmq instead of inserting synchronously.
+    // The agent's HTTP request returns in <50ms regardless of how slow the
+    // real activity_events table is. ActivityWorkerService drains the queue
+    // every 2s and bulk-inserts in the background.
+    //
+    // The agent's "Synced: N activity ..." log line shows the count of
+    // events ENQUEUED, not the count actually flushed to Postgres — that
+    // happens shortly after, off the request hot path.
+    //
+    // `deviceId` is top-level on the payload so downstream filtering
+    // (getLiveStatus currentApp, future per-device reports) can pivot
+    // without re-joining to agent_devices on every read.
+    await this.activityQueue.enqueue({
+      userId: user.id,
+      organizationId: user.organizationId,
+      deviceId: deviceId ?? null,
+      events: dto.events.map((e) => ({
+        appName: e.appName,
+        windowTitle: e.windowTitle ?? null,
+        startedAt: typeof e.startedAt === 'string' ? e.startedAt : new Date(e.startedAt).toISOString(),
+        durationSec: e.durationSec,
+        durationMs: e.durationMs,
+        keystrokeCount: e.keystrokeCount,
+      })),
+    });
+
+    // Live monitoring still gets the latest event inline so the dashboard
+    // grid flips immediately — this is in-memory + WebSocket only, no DB
+    // round-trip on the hot path. Only the persistent insert is deferred.
+    // `deviceId` is forwarded when present so device-centric subscribers
+    // can route the update to the exact card instead of broadcasting.
+    const latest = dto.events[dto.events.length - 1];
+    this.monitoringGateway?.emitActivityUpdate(user.organizationId, {
+      userId: user.id,
+      deviceId,
+      appName: latest.appName,
+      windowTitle: latest.windowTitle ?? null,
+      timestamp: typeof latest.startedAt === 'string' ? new Date(latest.startedAt) : latest.startedAt,
+    });
+
+    return dto.events.length;
   }
 
   async generateUploadUrl(user: User): Promise<{ uploadUrl: string; screenshotKey: string }> {
@@ -179,19 +214,41 @@ export class AgentService implements OnModuleInit {
     );
   }
 
-  async saveScreenshot(user: User, dto: SyncScreenshotDto): Promise<Screenshot> {
+  async saveScreenshot(
+    user: User,
+    dto: SyncScreenshotDto,
+    deviceId?: string,
+  ): Promise<Screenshot> {
     const entity = this.screenshotRepo.create({
       userId: user.id,
       organizationId: user.organizationId,
+      deviceId: deviceId ?? null,
       s3Key: dto.screenshotKey,
       capturedAt: new Date(dto.capturedAt),
       fileSizeBytes: dto.fileSizeBytes,
     });
     const saved = await this.screenshotRepo.save(entity);
+
+    // Presign the download URL and ship it inline with the WS emit so the
+    // live-view browser can render the frame immediately — no follow-up
+    // /monitoring/screenshots REST call needed. Failure to presign is
+    // non-fatal: we emit url='' and the browser's fallback HTTP poll
+    // (every ~2s) will pick up the frame via getPresignedDownloadUrl.
+    let url = '';
+    try {
+      url = await this.getPresignedDownloadUrl(dto.screenshotKey);
+    } catch (err) {
+      this.logger.warn(
+        `Presign for WS emit failed (screenshot=${saved.id}): ${(err as Error).message}`,
+      );
+    }
+
     this.monitoringGateway?.emitScreenshotTaken(user.organizationId, {
       userId: user.id,
+      deviceId,
       screenshotId: saved.id,
       capturedAt: saved.capturedAt,
+      url,
     });
     return saved;
   }
@@ -262,24 +319,53 @@ export class AgentService implements OnModuleInit {
     employeeId: string;
     orgId: string;
   }> {
-    // Validate and consume invite token (one-time use)
-    this.logger.log(`Register attempt: token="${dto.inviteToken?.slice(0, 8)}..." len=${dto.inviteToken?.length}`);
-    const userId = await this.tokenService.consume('invite', dto.inviteToken);
-    this.logger.log(`Token consume result: userId="${userId}"`);
-    if (!userId) {
-      throw new UnauthorizedException('Invalid or expired invite token');
+    // Exactly one of the two token paths must be provided.
+    if (!dto.personalToken && !dto.inviteToken) {
+      throw new UnauthorizedException('Missing personalToken or inviteToken');
+    }
+    if (dto.personalToken && dto.inviteToken) {
+      throw new UnauthorizedException('Provide only one of personalToken or inviteToken');
     }
 
-    const user = await this.userRepo.findOne({ where: { id: userId } });
+    // ── Resolve user ─────────────────────────────────────────────────────
+    let user: User | null = null;
+
+    if (dto.personalToken) {
+      // New flow: look up by users.agent_token. This column is declared
+      // `select: false` on the entity, so we must list it explicitly.
+      this.logger.log(`Register attempt (personal): token="${dto.personalToken.slice(0, 8)}..."`);
+      user = await this.userRepo.findOne({
+        where: { agentToken: dto.personalToken },
+        select: ['id', 'organizationId', 'isActive'],
+      });
+      if (!user) {
+        throw new UnauthorizedException('Invalid personal agent token');
+      }
+    } else {
+      // Legacy flow: consume one-time invite token.
+      this.logger.log(`Register attempt (invite): token="${dto.inviteToken!.slice(0, 8)}..." len=${dto.inviteToken!.length}`);
+      const userId = await this.tokenService.consume('invite', dto.inviteToken!);
+      this.logger.log(`Token consume result: userId="${userId}"`);
+      if (!userId) {
+        throw new UnauthorizedException('Invalid or expired invite token');
+      }
+      user = await this.userRepo.findOne({ where: { id: userId } });
+    }
+
     if (!user || !user.isActive) {
       throw new UnauthorizedException('User not found or inactive');
     }
 
+    // ── Create device row ───────────────────────────────────────────────
+    // displayName fallback chain: user-entered name > hostname > null.
+    // Older agents that don't know about the field will just leave it
+    // null and the dashboard falls back to hostname at render time.
     const deviceToken = randomUUID();
     const device = this.deviceRepo.create({
       organizationId: user.organizationId,
       userId: user.id,
       deviceToken,
+      displayName: dto.displayName?.trim() || dto.hostname || null,
       hostname: dto.hostname ?? null,
       platform: dto.os ?? null,
       agentVersion: dto.agentVersion ?? null,
@@ -287,21 +373,51 @@ export class AgentService implements OnModuleInit {
     });
     await this.deviceRepo.save(device);
 
-    this.logger.log(`Agent registered: user=${user.id} org=${user.organizationId} host=${dto.hostname}`);
+    // ── Burn the personal token ─────────────────────────────────────────
+    // Each successful registration consumes one personal token, so the
+    // next device has to fetch a fresh one from /settings/agent. This is
+    // fire-and-forget from the agent's perspective: the agent already
+    // holds its per-device `deviceToken` (returned below) and doesn't
+    // care that the personal token changed underneath it. Already-
+    // registered devices are unaffected for the same reason.
+    //
+    // The rotate is best-effort: if it throws, we still return success
+    // for this registration — the user can rotate manually from the UI
+    // if something went wrong. A rotate failure should never fail a
+    // working device register.
+    try {
+      await this.usersService.rotateAgentToken(user.id);
+    } catch (err) {
+      this.logger.warn(
+        `Auto-rotate after register failed for user=${user.id}: ${(err as Error).message}`,
+      );
+    }
+
+    this.logger.log(
+      `Agent registered: user=${user.id} org=${user.organizationId} ` +
+      `host=${dto.hostname} displayName="${device.displayName}"`,
+    );
     return { agentToken: deviceToken, employeeId: user.id, orgId: user.organizationId };
   }
 
-  async recordHeartbeat(user: User, dto: HeartbeatDto = {}): Promise<void> {
+  async recordHeartbeat(
+    user: User,
+    dto: HeartbeatDto = {},
+    deviceId?: string,
+  ): Promise<void> {
     const now = new Date();
-    await this.deviceRepo.update(
-      { userId: user.id, isActive: true },
-      { lastSeenAt: now },
-    );
-    // Derive presence state from the agent's AFK self-report.
-    // If the agent reports idle=true, flip the badge; otherwise mark online.
-    // Offline transitions come from the periodic sweep cron in MonitoringService.
+    // Round 5 / R5.3: write-behind via HeartbeatBufferService. This replaces
+    // a per-request UPDATE (1,667 QPS at 100K agents) with one bulk UPDATE
+    // every 5 seconds. The WebSocket emit stays inline so live-view presence
+    // still flips instantly.
+    //
+    // The buffer keys by deviceId so each machine has its own last_seen_at
+    // timer (see HeartbeatBufferService docstring). The third arg is only
+    // carried for logging/debugging.
+    this.heartbeatBuffer.record(deviceId, now, user.id);
     this.monitoringGateway?.emitEmployeeStatus(user.organizationId, {
       userId: user.id,
+      deviceId,
       status: dto.idle ? 'idle' : 'online',
       lastSeen: now,
     });
@@ -312,35 +428,38 @@ export class AgentService implements OnModuleInit {
   }
 
   async saveMetrics(user: User, dto: SyncMetricsDto): Promise<void> {
-    // Identity (employeeId, orgId) is taken from the authenticated agent user,
-    // NOT from the request body — prevents IDOR spoofing of metrics for another user.
-    const records = dto.events.map((e) =>
-      this.metricsRepo.create({
-        employeeId: user.id,
-        orgId: user.organizationId,
+    if (dto.events.length === 0) return;
+    // Enqueue instead of synchronous insert. Identity comes from the auth
+    // guard's user object, not the DTO body — preserves the IDOR fix from
+    // Round 5 / R5.2. MetricsWorkerService drains every 5 seconds.
+    await this.metricsQueue.enqueue({
+      userId: user.id,
+      organizationId: user.organizationId,
+      events: dto.events.map((e) => ({
         cpuPercent: e.cpuPercent,
         memUsedMb: e.memUsedMb,
         memTotalMb: e.memTotalMb,
         agentCpuPercent: e.agentCpuPercent,
         agentMemMb: e.agentMemMb,
-        recordedAt: new Date(e.recordedAt),
-      }),
-    );
-    await this.metricsRepo.save(records);
+        recordedAt: typeof e.recordedAt === 'string' ? e.recordedAt : new Date(e.recordedAt).toISOString(),
+      })),
+    });
   }
 
   async saveKeystrokes(user: User, dto: SyncKeystrokesDto): Promise<number> {
-    const entities = dto.events.map((e) =>
-      this.keystrokeRepo.create({
-        userId: user.id,
-        organizationId: user.organizationId,
+    if (dto.events.length === 0) return 0;
+    // Enqueue instead of synchronous insert. Same rationale as saveActivities.
+    // KeystrokesWorkerService drains every 5 seconds.
+    await this.keystrokesQueue.enqueue({
+      userId: user.id,
+      organizationId: user.organizationId,
+      events: dto.events.map((e) => ({
         keysPerMin: e.keysPerMin,
         mousePerMin: e.mousePerMin,
-        recordedAt: new Date(e.recordedAt),
-      }),
-    );
-    await this.keystrokeRepo.save(entities);
-    return entities.length;
+        recordedAt: typeof e.recordedAt === 'string' ? e.recordedAt : new Date(e.recordedAt).toISOString(),
+      })),
+    });
+    return dto.events.length;
   }
 
   async saveTelemetry(user: User, dto: SyncTelemetryDto): Promise<void> {

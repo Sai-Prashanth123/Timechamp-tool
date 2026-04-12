@@ -19,7 +19,15 @@ import (
 const (
 	windowsServiceName = "TimeChampAgent"
 	windowsRegValueKey = "TimeChampAgent"
-	windowsRegRunPath  = `Software\Microsoft\Windows\CurrentVersion\Run`
+	// Round 6 / R6.2 — separate Run-key value for the tray process. The tray
+	// embeds the agent binary and supervises it; auto-launching the tray on
+	// login means the agent is ALSO supervised on every session, even if the
+	// Windows Service path failed (non-admin install) or the user manually
+	// stopped the service. The tray's own ensureAutoStart() in
+	// cmd/tray/autostart_windows.go writes this same value name on every
+	// launch — both code paths converge on the same registry slot, idempotent.
+	windowsTrayRegValueKey = "TimeChamp"
+	windowsRegRunPath      = `Software\Microsoft\Windows\CurrentVersion\Run`
 )
 
 // platformInstallBinary writes the agent binary to
@@ -72,24 +80,42 @@ func platformInstallBinary(cfg Config) (string, error) {
 // platformConfigureAutoStart attempts to install a Windows Service (requires
 // admin rights obtained via UAC elevation). If UAC is declined or unavailable,
 // falls back to HKCU registry Run key (no elevation needed).
+//
+// Round 6 / R6.2 — also unconditionally registers the TRAY in the per-user
+// Run key, so the tray + its embedded agent supervisor auto-launch on every
+// login regardless of which path the agent itself uses (service or fallback).
+// If the tray registration fails, it's logged via the warnings slice but does
+// NOT fail the overall install — the tray's own ensureAutoStart() helper at
+// cmd/tray/autostart_windows.go will register itself on first launch as a
+// belt-and-braces backup.
 func platformConfigureAutoStart(binaryPath, apiURL string) (string, []string, error) {
+	var warnings []string
+
 	installed, err := installService(binaryPath)
 	if err != nil {
 		return "", nil, fmt.Errorf("service install: %w", err)
 	}
-	if installed {
-		return "windows-service", nil, nil
+
+	// Belt-and-braces tray registration. Never fatal — best effort.
+	if trayErr := installTrayRunKey(); trayErr != nil {
+		warnings = append(warnings,
+			fmt.Sprintf("Could not register the tray for auto-start: %v "+
+				"(the tray will self-register on its next manual launch).", trayErr))
 	}
 
-	// UAC declined or service install failed — registry fallback.
+	if installed {
+		return "windows-service", warnings, nil
+	}
+
+	// UAC declined or service install failed — registry fallback for the agent.
 	if err := installRegistryRunKey(binaryPath); err != nil {
-		return "", nil, fmt.Errorf("registry Run key: %w — "+
+		return "", warnings, fmt.Errorf("registry Run key: %w — "+
 			"Run setup as Administrator or contact IT.", err)
 	}
-	return "registry", []string{
-		"Windows Service installation was skipped (UAC declined or policy blocked). " +
-			"The agent is configured to start via the registry Run key (user login only).",
-	}, nil
+	warnings = append(warnings,
+		"Windows Service installation was skipped (UAC declined or policy blocked). "+
+			"The agent is configured to start via the registry Run key (user login only).")
+	return "registry", warnings, nil
 }
 
 // platformStartAgent starts the agent immediately after installation.
@@ -298,4 +324,46 @@ func installRegistryRunKey(binaryPath string) error {
 	defer k.Close()
 	// Quote the path to handle spaces in %LOCALAPPDATA%.
 	return k.SetStringValue(windowsRegValueKey, `"`+binaryPath+`"`)
+}
+
+// installTrayRunKey writes the tray's expected runtime path to HKCU\...\Run
+// so the tray auto-launches at user login. The tray then supervises the
+// embedded agent (via its monitorAgent goroutine) and provides the system
+// tray UI for status visibility.
+//
+// Convention: the tray binary lives at %LOCALAPPDATA%\TimeChamp\timechamp-tray.exe
+// after install. If the file doesn't exist at that path yet, we still write
+// the registry value — Windows simply ignores Run-key entries that point at
+// missing files until the file is restored.
+//
+// Idempotent: writes the same value name (`TimeChamp`) that the tray's own
+// ensureAutoStart() helper uses, so the two paths converge on a single slot.
+// Calling either repeatedly is safe and produces no duplicate entries.
+//
+// Returns nil on success. Caller treats failures as non-fatal warnings.
+func installTrayRunKey() error {
+	localAppData := os.Getenv("LOCALAPPDATA")
+	if localAppData == "" {
+		localAppData = filepath.Join(os.Getenv("USERPROFILE"), "AppData", "Local")
+	}
+	trayPath := filepath.Join(localAppData, "TimeChamp", "timechamp-tray.exe")
+
+	k, _, err := registry.CreateKey(
+		registry.CURRENT_USER,
+		windowsRegRunPath,
+		registry.SET_VALUE|registry.QUERY_VALUE,
+	)
+	if err != nil {
+		return fmt.Errorf("open Run key: %w", err)
+	}
+	defer k.Close()
+
+	cmd := `"` + trayPath + `"`
+
+	// Idempotency check — skip the write if the value already matches.
+	existing, _, _ := k.GetStringValue(windowsTrayRegValueKey)
+	if existing == cmd {
+		return nil
+	}
+	return k.SetStringValue(windowsTrayRegValueKey, cmd)
 }

@@ -39,7 +39,7 @@ export default function OverviewPage() {
         {/* Stats row */}
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
           <StatCard
-            title="Active Employees"
+            title="Active Agents"
             value={isLoading ? '...' : onlineCount}
             icon={<Users className="w-4 h-4" />}
             iconColor="bg-blue-500"
@@ -83,9 +83,10 @@ export default function OverviewPage() {
               </p>
             ) : (
               <ul className="divide-y divide-slate-100">
-                {liveEmployees.slice(0, 8).map((emp) => {
-                  const live = storeEmployees[emp.userId];
-                  // Fall back to 'online' since REST only returns active employees
+                {liveEmployees.slice(0, 8).map((d, idx) => {
+                  const userId = d?.userId ?? '';
+                  const live = userId ? storeEmployees[userId] : undefined;
+                  // Fall back to 'online' since REST only returns active devices
                   const status = live?.status ?? 'online';
                   const dotColour =
                     status === 'online'
@@ -93,24 +94,30 @@ export default function OverviewPage() {
                       : status === 'idle'
                       ? 'bg-yellow-400'
                       : 'bg-slate-300';
+                  const cardTitle =
+                    d?.displayName ?? d?.hostname ?? d?.userName ?? 'Unknown device';
+                  const userName = d?.userName ?? '';
                   return (
                     <li
-                      key={emp.userId}
+                      key={d?.deviceId ?? `device-${idx}`}
                       className="flex items-center justify-between py-2"
                     >
                       <div className="flex items-center gap-2">
                         <span className={`inline-block h-2 w-2 rounded-full ${dotColour}`} />
                         <a
-                          href={`/monitoring/${emp.userId}`}
+                          href={userId ? `/monitoring/${userId}` : '#'}
                           className="text-sm font-medium text-slate-800 hover:text-blue-600 hover:underline"
                         >
-                          {emp.firstName} {emp.lastName}
+                          {cardTitle}
                         </a>
+                        {userName && (
+                          <span className="text-xs text-slate-400">· {userName}</span>
+                        )}
                       </div>
                       <div className="text-right text-xs text-slate-500">
-                        <p>{live?.activeApp ?? emp.currentApp ?? 'Idle'}</p>
+                        <p>{live?.activeApp ?? d?.currentApp ?? 'Idle'}</p>
                         <p className="text-slate-400">
-                          {elapsedSince(emp.clockedInSince)} elapsed
+                          {d?.clockedInSince ? `${elapsedSince(d.clockedInSince)} elapsed` : '—'}
                         </p>
                       </div>
                     </li>

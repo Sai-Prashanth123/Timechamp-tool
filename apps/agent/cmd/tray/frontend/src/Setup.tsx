@@ -9,15 +9,22 @@ interface Props {
 }
 
 export default function Setup({ onComplete }: Props) {
-  const [apiUrl, setApiUrl] = useState('http://localhost:3001/api/v1')
+  const [apiUrl, setApiUrl] = useState(
+    'https://timechamp-api-fgasejh3f0a7gxgk.eastasia-01.azurewebsites.net/api/v1',
+  )
+  const [displayName, setDisplayName] = useState('')
   const [token, setToken] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState(false)
 
   async function handleRegister() {
+    if (!displayName.trim()) {
+      setError('Please enter a display name for this machine.')
+      return
+    }
     if (!token.trim()) {
-      setError('Please enter your invite token.')
+      setError('Please enter your personal agent token.')
       return
     }
     setLoading(true)
@@ -32,7 +39,7 @@ export default function Setup({ onComplete }: Props) {
     }
 
     try {
-      await Register(apiUrl, token.trim())
+      await Register(apiUrl, displayName.trim(), token.trim())
       setSuccess(true)
       setTimeout(onComplete, 1800)
     } catch (e: unknown) {
@@ -75,18 +82,32 @@ export default function Setup({ onComplete }: Props) {
 
           <div>
             <label className="mb-1.5 block text-xs font-medium text-slate-400">
-              Invite Token
+              Display Name
+            </label>
+            <input
+              type="text"
+              value={displayName}
+              onChange={e => setDisplayName(e.target.value)}
+              placeholder="e.g. Sai's Laptop"
+              className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-200 placeholder-slate-600 focus:border-blue-500 focus:outline-none"
+            />
+            <p className="mt-1 text-xs text-slate-600">How this machine shows up on the dashboard</p>
+          </div>
+
+          <div>
+            <label className="mb-1.5 block text-xs font-medium text-slate-400">
+              Personal Token
             </label>
             <input
               type="password"
               value={token}
               onChange={e => setToken(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleRegister()}
-              placeholder="Paste token from dashboard"
+              placeholder="Paste your personal agent token"
               className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-200 placeholder-slate-600 focus:border-blue-500 focus:outline-none"
             />
             <p className="mt-1 text-xs text-slate-600">
-              Settings → Agent Setup → Generate Token
+              Settings → Agent Setup → My Personal Agent Token
             </p>
           </div>
         </div>

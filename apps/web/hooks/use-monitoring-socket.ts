@@ -12,7 +12,9 @@ export function useMonitoringSocket() {
   const role = session?.user?.role;
   const token = (session as any)?.accessToken as string | undefined;
   // Strip /api/v1 path — Socket.io namespaces live on the root server URL
-  const rawUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
+  const rawUrl =
+    process.env.NEXT_PUBLIC_API_URL ??
+    'https://timechamp-api-fgasejh3f0a7gxgk.eastasia-01.azurewebsites.net/api/v1';
   const apiUrl = rawUrl.replace(/\/api\/v\d+\/?$/, '');
 
   useEffect(() => {

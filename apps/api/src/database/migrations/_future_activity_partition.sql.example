@@ -1,0 +1,115 @@
+-- ================================================================
+-- FUTURE MIGRATION: convert activity_events to a monthly-partitioned table
+-- ================================================================
+--
+-- WHEN TO RUN THIS:
+--   The trigger condition is roughly 500,000 rows in activity_events. Below
+--   that, a single B-tree index on (user_id, started_at) outperforms partition
+--   pruning. Above that, partition pruning starts winning by 5-50× on
+--   typical dashboard queries (which always filter by a date range).
+--
+--   Check current row count via:
+--     SELECT COUNT(*), pg_size_pretty(pg_total_relation_size('activity_events'))
+--     FROM activity_events;
+--
+--   If count > 500,000 OR table size > 200 MB, run this migration.
+--
+-- WHY THIS ISN'T AN ACTIVE MIGRATION YET:
+--   1. At <500K rows, partitioning is overhead with no benefit.
+--   2. The migration changes the PK from (id) to (id, started_at) — a
+--      schema change that needs careful TypeORM testing.
+--   3. The copy-swap requires either downtime or a careful no-downtime dance
+--      with triggers + dual-writes. Best done in a planned maintenance window.
+--   4. pg_cron must be enabled for pg_partman's auto-maintenance to work.
+--
+-- WHAT THIS DOES:
+--   - Creates a new partitioned table with the same columns
+--   - Sets up pg_partman to auto-create one partition per month
+--   - Copies all existing rows from the old table
+--   - Atomically renames in a transaction
+--   - Drops the old table
+--   - Schedules pg_partman maintenance to run every hour
+--
+-- ROLLBACK:
+--   If anything goes wrong before the rename step, just DROP the new table.
+--   After the rename step, recovery requires restoring from the
+--   activity_events_legacy table that we keep around.
+--
+-- ================================================================
+
+BEGIN;
+
+-- 1. Enable pg_cron (needed for pg_partman auto-maintenance).
+CREATE EXTENSION IF NOT EXISTS pg_cron;
+
+-- 2. Create the new partitioned table. Schema MUST match activity_events
+--    column-for-column except for the composite PK requirement.
+CREATE TABLE activity_events_partitioned (
+  id              UUID NOT NULL DEFAULT gen_random_uuid(),
+  user_id         UUID NOT NULL,
+  organization_id UUID NOT NULL,
+  app_name        VARCHAR(255) NOT NULL,
+  window_title    VARCHAR(500),
+  started_at      TIMESTAMPTZ NOT NULL,
+  duration_sec    INTEGER NOT NULL DEFAULT 0,
+  keystroke_count INTEGER NOT NULL DEFAULT 0,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  -- pg_partman REQUIRES the partition key in the PK
+  PRIMARY KEY (id, started_at)
+) PARTITION BY RANGE (started_at);
+
+-- 3. Set up pg_partman to manage monthly partitions.
+SELECT partman.create_parent(
+  p_parent_table        := 'public.activity_events_partitioned',
+  p_control             := 'started_at',
+  p_interval            := '1 month',
+  p_premake             := 4,                  -- create the next 4 months in advance
+  p_default_table       := true,               -- default partition for out-of-range rows
+  p_automatic_maintenance := 'on'
+);
+
+-- 4. Copy existing rows. This may take a while at scale — chunk it if needed.
+INSERT INTO activity_events_partitioned (
+  id, user_id, organization_id, app_name, window_title,
+  started_at, duration_sec, keystroke_count, created_at
+)
+SELECT id, user_id, organization_id, app_name, window_title,
+       started_at, duration_sec, keystroke_count, created_at
+FROM activity_events;
+
+-- 5. Sanity-check row counts before swap.
+DO $$
+DECLARE
+  old_count BIGINT;
+  new_count BIGINT;
+BEGIN
+  SELECT COUNT(*) INTO old_count FROM activity_events;
+  SELECT COUNT(*) INTO new_count FROM activity_events_partitioned;
+  IF old_count != new_count THEN
+    RAISE EXCEPTION 'Row count mismatch: old=%, new=%', old_count, new_count;
+  END IF;
+END $$;
+
+-- 6. Recreate the indexes from the original on the new partitioned table.
+--    pg_partman propagates these to every existing and future partition.
+CREATE INDEX idx_activity_events_part_user_started
+  ON activity_events_partitioned(user_id, started_at DESC);
+CREATE INDEX idx_activity_events_part_org_started
+  ON activity_events_partitioned(organization_id, started_at DESC);
+
+-- 7. Atomic rename. Old table is preserved as _legacy for rollback.
+ALTER TABLE activity_events RENAME TO activity_events_legacy;
+ALTER TABLE activity_events_partitioned RENAME TO activity_events;
+
+-- 8. Schedule pg_partman maintenance to run every hour.
+SELECT cron.schedule(
+  'partman_run_maintenance',
+  '0 * * * *',
+  $$SELECT partman.run_maintenance(p_analyze := false)$$
+);
+
+-- 9. (Optional) After verifying the app works for a few days, drop the legacy:
+--    DROP TABLE activity_events_legacy;
+--    For now keep it as a safety net.
+
+COMMIT;

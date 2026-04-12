@@ -1,12 +1,13 @@
 'use client';
 
-import { useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useEffect, useMemo, useState } from 'react';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Header } from '@/components/dashboard/header';
 import { ActivityTimeline } from '@/components/monitoring/activity-timeline';
 import { ScreenshotGallery } from '@/components/monitoring/screenshot-gallery';
 import { useMonitoringStore } from '@/stores/monitoring-store';
 import { todayISO, elapsedSince } from '@/hooks/use-monitoring';
+import { useAgentDevices } from '@/hooks/use-agent';
 import api from '@/lib/api';
 
 type Tab = 'live' | 'screenshots' | 'activity';
@@ -14,11 +15,35 @@ type Tab = 'live' | 'screenshots' | 'activity';
 export default function EmployeeMonitoringPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const urlDeviceId = searchParams.get('deviceId');
   const userId = params.userId as string;
 
-  const [tab, setTab] = useState<Tab>('live');
+  // Seed the tab to Activity when the deep-link comes in from the settings
+  // page — that's the only URL form that uses ?deviceId. For a plain visit
+  // to /monitoring/:userId we leave it on 'live'.
+  const [tab, setTab] = useState<Tab>(urlDeviceId ? 'activity' : 'live');
   const [selectedDate, setSelectedDate] = useState(todayISO());
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>(urlDeviceId ?? '');
   const [isRequesting, setIsRequesting] = useState(false);
+
+  // Keep state in sync if the user navigates between devices from the
+  // settings page without a full page reload.
+  useEffect(() => {
+    if (urlDeviceId && urlDeviceId !== selectedDeviceId) {
+      setSelectedDeviceId(urlDeviceId);
+    }
+    // intentional: we only want to react to URL changes, not local state
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlDeviceId]);
+
+  // Narrow the device picker to just this employee's machines. If they own
+  // only one, the picker effectively becomes a read-only label.
+  const { data: allDevices = [] } = useAgentDevices();
+  const userDevices = useMemo(
+    () => allDevices.filter((d) => d.userId === userId),
+    [allDevices, userId],
+  );
 
   const handleWatchLive = async () => {
     setIsRequesting(true);
@@ -70,7 +95,7 @@ export default function EmployeeMonitoringPage() {
         </div>
 
         {tab !== 'live' && (
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <label className="text-sm font-medium text-slate-700">Date</label>
             <input
               type="date"
@@ -79,6 +104,20 @@ export default function EmployeeMonitoringPage() {
               onChange={(e) => setSelectedDate(e.target.value)}
               className="border border-slate-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
             />
+            <label className="text-sm font-medium text-slate-700 ml-2">Device</label>
+            <select
+              aria-label="Filter by device"
+              value={selectedDeviceId}
+              onChange={(e) => setSelectedDeviceId(e.target.value)}
+              className="border border-slate-300 rounded-md px-3 py-1.5 text-sm w-64 focus:outline-none focus:ring-2 focus:ring-blue-300"
+            >
+              <option value="">All devices ({userDevices.length})</option>
+              {userDevices.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.displayName ?? d.hostname ?? d.id.slice(0, 8)}
+                </option>
+              ))}
+            </select>
           </div>
         )}
 
@@ -126,11 +165,21 @@ export default function EmployeeMonitoringPage() {
         )}
 
         {tab === 'screenshots' && (
-          <ScreenshotGallery userId={userId} from={from} to={to} />
+          <ScreenshotGallery
+            userId={userId}
+            deviceId={selectedDeviceId || undefined}
+            from={from}
+            to={to}
+          />
         )}
 
         {tab === 'activity' && (
-          <ActivityTimeline userId={userId} from={from} to={to} />
+          <ActivityTimeline
+            userId={userId}
+            deviceId={selectedDeviceId || undefined}
+            from={from}
+            to={to}
+          />
         )}
       </div>
     </>

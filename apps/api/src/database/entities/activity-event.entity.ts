@@ -23,6 +23,13 @@ export class ActivityEvent {
   @Column({ name: 'organization_id' })
   organizationId: string;
 
+  // Populated at ingest time from AgentAuthGuard's request.device.
+  // Nullable because legacy rows (written before migration 019) have no
+  // device context. Live monitoring filters by this for device-scoped
+  // currentApp display.
+  @Column({ name: 'device_id', type: 'uuid', nullable: true })
+  deviceId: string | null;
+
   @Column({ name: 'app_name', length: 255 })
   appName: string;
 

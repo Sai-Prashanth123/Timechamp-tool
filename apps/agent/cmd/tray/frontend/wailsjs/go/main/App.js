@@ -14,6 +14,6 @@ export function Ping(arg1) {
   return window['go']['main']['App']['Ping'](arg1);
 }
 
-export function Register(arg1, arg2) {
-  return window['go']['main']['App']['Register'](arg1, arg2);
+export function Register(arg1, arg2, arg3) {
+  return window['go']['main']['App']['Register'](arg1, arg2, arg3);
 }

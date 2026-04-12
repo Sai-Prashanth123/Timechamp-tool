@@ -10,10 +10,18 @@ import { AgentService } from '../agent/agent.service';
 import { MonitoringGateway } from './monitoring.gateway';
 import { RedisService } from '../../infrastructure/redis/redis.service';
 
-export type LiveEmployee = {
+/**
+ * One row per live agent device — NOT per user. A single user can own
+ * multiple machines and each appears as its own card on the dashboard.
+ * Legacy callers that still want the old employee-centric shape should
+ * group this by userId on the client.
+ */
+export type LiveDevice = {
+  deviceId: string;
   userId: string;
-  firstName: string;
-  lastName: string;
+  userName: string;
+  displayName: string | null;  // user-entered label ("Sai's Laptop")
+  hostname: string | null;      // fallback when displayName is null
   clockedInSince: Date;
   currentApp: string | null;
   lastSeenAt: Date | null;
@@ -75,34 +83,41 @@ export class MonitoringService {
     const threshold = new Date(Date.now() - OFFLINE_THRESHOLD_MS);
     const stale = await this.deviceRepo.find({
       where: { isActive: true, lastSeenAt: LessThan(threshold) },
-      select: ['userId', 'organizationId', 'lastSeenAt'],
+      select: ['id', 'userId', 'organizationId', 'lastSeenAt'],
     });
 
+    // Dedupe by deviceId, not userId, so two stale machines owned by the
+    // same user each get their own offline event.
     const stillStale = new Set<string>();
     for (const device of stale) {
-      stillStale.add(device.userId);
-      if (this.offlineEmitted.has(device.userId)) continue;
-      this.offlineEmitted.add(device.userId);
+      stillStale.add(device.id);
+      if (this.offlineEmitted.has(device.id)) continue;
+      this.offlineEmitted.add(device.id);
       this.monitoringGateway.emitEmployeeStatus(device.organizationId, {
         userId: device.userId,
+        deviceId: device.id,
         status: 'offline',
         lastSeen: device.lastSeenAt ?? new Date(0),
       });
-      this.logger.debug(`Marked user ${device.userId} offline (stale heartbeat)`);
+      this.logger.debug(`Marked device ${device.id} (user ${device.userId}) offline (stale heartbeat)`);
     }
-    // Drop cache entries for users who are no longer stale (they reconnected).
-    for (const userId of this.offlineEmitted) {
-      if (!stillStale.has(userId)) this.offlineEmitted.delete(userId);
+    // Drop cache entries for devices that have since reconnected (they
+    // left the LessThan window).
+    for (const deviceId of this.offlineEmitted) {
+      if (!stillStale.has(deviceId)) this.offlineEmitted.delete(deviceId);
     }
   }
 
   async getActivity(
     userId: string | undefined,
     organizationId: string,
-    query: { from?: string; to?: string },
+    query: { from?: string; to?: string; deviceId?: string },
   ): Promise<ActivityEvent[]> {
     const where: any = { organizationId };
     if (userId) where.userId = userId;
+    // deviceId filter — a user with multiple machines sees one device's
+    // activity at a time instead of all devices mixed into one timeline.
+    if (query.deviceId) where.deviceId = query.deviceId;
     if (query.from && query.to) {
       where.startedAt = Between(new Date(query.from), new Date(query.to));
     }
@@ -116,10 +131,14 @@ export class MonitoringService {
   async getScreenshots(
     userId: string | undefined,
     organizationId: string,
-    query: { from?: string; to?: string },
+    query: { from?: string; to?: string; deviceId?: string },
   ): Promise<ScreenshotWithUrl[]> {
     const where: any = { organizationId };
     if (userId) where.userId = userId;
+    // deviceId filter used by the /live per-device Watch Live flow so the
+    // LiveScreenshotView polling only returns shots from the machine you
+    // clicked, not all devices that user owns.
+    if (query.deviceId) where.deviceId = query.deviceId;
     if (query.from && query.to) {
       where.capturedAt = Between(new Date(query.from), new Date(query.to));
     }
@@ -140,10 +159,14 @@ export class MonitoringService {
     );
   }
 
-  async getLiveStatus(organizationId: string): Promise<LiveEmployee[]> {
-    const cacheKey = `live:${organizationId}`;
+  async getLiveStatus(organizationId: string): Promise<LiveDevice[]> {
+    // v2 cache key — the payload shape changed when this flipped from
+    // employee-centric (one row per user) to device-centric (one row per
+    // agent). Any stale v1 entries are ignored rather than deserialized
+    // into the wrong type.
+    const cacheKey = `live:v2:${organizationId}`;
     const cached = await this.redis.get(cacheKey);
-    if (cached) return JSON.parse(cached) as LiveEmployee[];
+    if (cached) return JSON.parse(cached) as LiveDevice[];
 
     // Consider any device that sent a heartbeat in the last 5 minutes as "online"
     const since = new Date(Date.now() - ONLINE_WINDOW_MS);
@@ -153,16 +176,26 @@ export class MonitoringService {
       order: { lastSeenAt: 'DESC' },
     });
 
-    const result = await Promise.all(
+    const result: LiveDevice[] = await Promise.all(
       activeDevices.map(async (device) => {
+        // currentApp is filtered by deviceId so two machines owned by the
+        // same user show their own apps on their own cards. During the
+        // first ~30s after a fresh deploy the activity queue may still
+        // be flushing rows with null deviceId — those are ignored by this
+        // query and the card briefly shows "Idle" until the next batch.
         const lastActivity = await this.activityRepo.findOne({
-          where: { userId: device.userId, organizationId },
+          where: { deviceId: device.id, organizationId },
           order: { startedAt: 'DESC' },
         });
+        const userName =
+          `${device.user?.firstName ?? ''} ${device.user?.lastName ?? ''}`.trim() ||
+          (device.user?.email ?? '');
         return {
+          deviceId: device.id,
           userId: device.userId,
-          firstName: device.user?.firstName ?? '',
-          lastName: device.user?.lastName ?? '',
+          userName,
+          displayName: device.displayName ?? null,
+          hostname: device.hostname ?? null,
           clockedInSince: device.lastSeenAt ?? device.createdAt,
           currentApp: lastActivity?.appName ?? null,
           lastSeenAt: device.lastSeenAt,

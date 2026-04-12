@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { StreamSession } from '../../database/entities/stream-session.entity';
 import { Organization } from '../../database/entities/organization.entity';
 import { User } from '../../database/entities/user.entity';
+import { AgentDevice } from '../../database/entities/agent-device.entity';
 import { StreamingController } from './streaming.controller';
 import { StreamingGateway } from './streaming.gateway';
 import { StreamingService } from './streaming.service';
@@ -13,7 +14,7 @@ import { AuthModule } from '../auth/auth.module';
 @Global()
 @Module({
   imports: [
-    TypeOrmModule.forFeature([StreamSession, Organization, User]),
+    TypeOrmModule.forFeature([StreamSession, Organization, User, AgentDevice]),
     AuthModule,
   ],
   controllers: [StreamingController],

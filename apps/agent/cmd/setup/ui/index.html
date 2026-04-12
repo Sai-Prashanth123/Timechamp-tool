@@ -145,14 +145,20 @@
   <div id="form-panel">
     <div class="field">
       <label for="apiUrl">API URL</label>
-      <input id="apiUrl" type="url" value="https://api.timechamp.io/api/v1" autocomplete="off" />
+      <input id="apiUrl" type="url" value="https://timechamp-api-fgasejh3f0a7gxgk.eastasia-01.azurewebsites.net/api/v1" autocomplete="off" />
       <div class="hint">Leave as default unless you are self-hosting</div>
     </div>
 
     <div class="field">
-      <label for="token">Invite Token</label>
-      <input id="token" type="password" placeholder="Paste your invite token here" autocomplete="off" />
-      <div class="hint">Generate from Dashboard → Settings → Agent Setup → Generate Token</div>
+      <label for="displayName">Display Name</label>
+      <input id="displayName" type="text" placeholder="e.g. Sai's Laptop" autocomplete="off" />
+      <div class="hint">How this machine shows up on the dashboard</div>
+    </div>
+
+    <div class="field">
+      <label for="token">Personal Token</label>
+      <input id="token" type="password" placeholder="Paste your personal agent token here" autocomplete="off" />
+      <div class="hint">Get it from Dashboard → Settings → Agent Setup → My Personal Agent Token</div>
     </div>
 
     <button class="btn" id="start-btn" onclick="startSetup()">
@@ -241,17 +247,23 @@
   }
 
   function startSetup() {
-    const apiUrl = document.getElementById('apiUrl').value.trim();
-    const token  = document.getElementById('token').value.trim();
-    const errEl  = document.getElementById('form-error');
+    const apiUrl      = document.getElementById('apiUrl').value.trim();
+    const displayName = document.getElementById('displayName').value.trim();
+    const token       = document.getElementById('token').value.trim();
+    const errEl       = document.getElementById('form-error');
 
     if (!token) {
-      errEl.textContent = 'Please paste your invite token.';
+      errEl.textContent = 'Please paste your personal agent token.';
       errEl.style.display = 'block';
       return;
     }
     if (!apiUrl) {
       errEl.textContent = 'Please enter an API URL.';
+      errEl.style.display = 'block';
+      return;
+    }
+    if (!displayName) {
+      errEl.textContent = 'Please enter a display name for this machine.';
       errEl.style.display = 'block';
       return;
     }
@@ -264,13 +276,14 @@
     document.getElementById('retry-btn').style.display   = 'none';
 
     initStepRows();
-    openStream(apiUrl, token);
+    openStream(apiUrl, displayName, token);
   }
 
-  function openStream(apiUrl, token) {
+  function openStream(apiUrl, displayName, token) {
     if (es) { es.close(); es = null; }
 
     const url = '/register-stream?apiUrl=' + encodeURIComponent(apiUrl) +
+                '&name='   + encodeURIComponent(displayName) +
                 '&token='  + encodeURIComponent(token);
     es = new EventSource(url);
 

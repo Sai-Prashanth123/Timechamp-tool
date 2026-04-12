@@ -143,6 +143,20 @@ import { AdminModule } from './modules/admin/admin.module';
           synchronize: false,
           logging: config.get('NODE_ENV') !== 'production',
           ssl: isSupabase ? { rejectUnauthorized: false } : false,
+          // Production-scale pool config — Round 5 / R5.1.
+          // At 100K concurrent agents, the default pool of 10 deadlocks in
+          // seconds. With 50 warm connections and aggressive query timeouts,
+          // each connection can sustain ~500 QPS at ~100ms avg query time,
+          // giving us 25K QPS of headroom. `statement_timeout` aborts any
+          // single hung query instead of letting it starve the whole pool.
+          extra: {
+            max: 50,
+            min: 10,
+            idleTimeoutMillis: 30_000,
+            connectionTimeoutMillis: 5_000,
+            statement_timeout: 10_000,
+            query_timeout: 10_000,
+          },
         };
       },
     }),

@@ -32,35 +32,39 @@ export class MonitoringController {
   }
 
   @Get('activity')
-  @ApiOperation({ summary: 'List activity events. Employees see own; managers see all or filter by userId.' })
+  @ApiOperation({ summary: 'List activity events. Employees see own; managers see all or filter by userId/deviceId.' })
   @ApiQuery({ name: 'userId', required: false })
+  @ApiQuery({ name: 'deviceId', required: false, description: 'Narrow to a single agent device' })
   @ApiQuery({ name: 'from', required: false })
   @ApiQuery({ name: 'to', required: false })
   getActivity(
     @CurrentUser() user: User,
     @Query('userId') userId?: string,
+    @Query('deviceId') deviceId?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
   ) {
     // Employees can only see their own activity
     const targetUserId =
       user.role === UserRole.EMPLOYEE ? user.id : (userId ?? undefined);
-    return this.service.getActivity(targetUserId, user.organizationId, { from, to });
+    return this.service.getActivity(targetUserId, user.organizationId, { from, to, deviceId });
   }
 
   @Get('screenshots')
-  @ApiOperation({ summary: 'List screenshots. Employees see own; managers see all or filter by userId.' })
+  @ApiOperation({ summary: 'List screenshots. Employees see own; managers see all or filter by userId/deviceId.' })
   @ApiQuery({ name: 'userId', required: false })
+  @ApiQuery({ name: 'deviceId', required: false, description: 'Narrow to a single agent device' })
   @ApiQuery({ name: 'from', required: false })
   @ApiQuery({ name: 'to', required: false })
   getScreenshots(
     @CurrentUser() user: User,
     @Query('userId') userId?: string,
+    @Query('deviceId') deviceId?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
   ) {
     const targetUserId =
       user.role === UserRole.EMPLOYEE ? user.id : (userId ?? undefined);
-    return this.service.getScreenshots(targetUserId, user.organizationId, { from, to });
+    return this.service.getScreenshots(targetUserId, user.organizationId, { from, to, deviceId });
   }
 }

@@ -1,0 +1,40 @@
+# =============================================================================
+# Docker build context exclusions for the Next.js web app
+# =============================================================================
+# Anything listed here is NOT sent to the Docker daemon when building.
+# Keeps the build context small and prevents host-only artifacts from
+# leaking into image layers.
+# =============================================================================
+
+# Local dependencies (the deps stage runs `npm ci` from the lockfile)
+node_modules
+npm-debug.log
+
+# Build outputs (the build stage runs `next build` fresh inside the image)
+.next
+out
+*.tsbuildinfo
+
+# Local environment files — secrets are baked into the Dockerfile via ENV
+.env
+.env.*
+!.env.example
+
+# Editor / IDE
+.vscode
+.idea
+*.swp
+.DS_Store
+
+# Git metadata — never needed at runtime
+.git
+.gitignore
+
+# Docker meta — don't recursively include the Dockerfile in the context
+Dockerfile
+.dockerignore
+
+# Test / coverage artifacts
+coverage
+.nyc_output
+*.log

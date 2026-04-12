@@ -111,15 +111,33 @@ func (a *App) Ping(apiURL string) error {
 	return nil
 }
 
-// Register authenticates with the API using the invite token, saves credentials,
-// extracts the embedded agent binary to the data directory, and launches it.
-// Token is saved to keychain BEFORE launch; the agent reads it from keychain
-// directly and no secret is passed via environment variable.
-func (a *App) Register(apiURL, inviteToken string) error {
+// Register authenticates with the API using the user's personal agent
+// token plus a display name for this machine, saves credentials, extracts
+// the embedded agent binary to the data directory, and launches it. The
+// per-device token returned by the API is saved to the OS keychain BEFORE
+// launch; the agent reads it from keychain directly and no secret is
+// passed via environment variable.
+//
+// `displayName` is the human label shown on the admin dashboard (e.g.
+// "Sai's Laptop"). If it's empty we fall back to the legacy one-time
+// invite token flow so existing installers keep working.
+func (a *App) Register(apiURL, displayName, personalToken string) error {
 	hostname, _ := os.Hostname()
-	agentToken, employeeID, orgID, err := agentsync.Register(
-		apiURL, inviteToken, hostname, runtime.GOOS, runtime.GOARCH,
+	var (
+		agentToken string
+		employeeID string
+		orgID      string
+		err        error
 	)
+	if displayName != "" {
+		agentToken, employeeID, orgID, err = agentsync.RegisterWithPersonalToken(
+			apiURL, personalToken, displayName, hostname, runtime.GOOS, runtime.GOARCH,
+		)
+	} else {
+		agentToken, employeeID, orgID, err = agentsync.Register(
+			apiURL, personalToken, hostname, runtime.GOOS, runtime.GOARCH,
+		)
+	}
 	if err != nil {
 		return fmt.Errorf("registration failed: %w", err)
 	}
@@ -229,7 +247,11 @@ func (a *App) handlePowerEvents() {
 func (a *App) monitorAgent() {
 	const (
 		minBackoff = 10 * time.Second
-		maxBackoff = 5 * time.Minute
+		// Round 5 / R5.9: tightened from 5m → 2m. Original 5m was too long
+		// for active use — a crash during a work session left the user
+		// unsupervised for 5 full minutes. 2m is still gentle on a
+		// continuously-broken install but recovers fast for real crashes.
+		maxBackoff = 2 * time.Minute
 	)
 	backoff := minBackoff
 	timer := time.NewTimer(backoff)

@@ -2,6 +2,7 @@ package sync
 
 import (
 	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
@@ -14,6 +15,13 @@ import (
 	"strings"
 	"time"
 )
+
+// gzipCompressionThreshold — payloads smaller than this are sent as-is.
+// gzip has fixed header + dictionary overhead (~20 bytes); below ~512 bytes
+// the compressed payload is often LARGER than the original, plus the CPU
+// cost isn't worth the savings. Above ~512 bytes, JSON activity batches
+// typically compress to 10-20% of original size — a 5-10× wire reduction.
+const gzipCompressionThreshold = 512
 
 type circuitState int
 
@@ -93,7 +101,10 @@ func NewClient(baseURL, token string, opts ...ClientOption) *Client {
 	}
 
 	c.http = &http.Client{
-		Timeout:   30 * time.Second,
+		// 60s tolerates slow Supabase cold-starts and pooler contention
+		// without auto-timing-out. The circuit breaker still catches truly
+		// unreachable servers via consecutive failure counts.
+		Timeout:   60 * time.Second,
 		Transport: transport,
 	}
 	return c
@@ -134,6 +145,11 @@ func (c *Client) IsAvailable() bool {
 }
 
 // Post sends a POST request with a JSON body using full-jitter exponential backoff.
+//
+// Bodies larger than gzipCompressionThreshold are gzip-compressed before
+// sending, with Content-Encoding: gzip. Express's body-parser auto-inflates
+// on the API side (its `inflate: true` default), so no API code change is
+// needed. Activity batches typically compress to 10-20% of original size.
 func (c *Client) Post(path string, body any) error {
 	if !c.IsAvailable() {
 		return fmt.Errorf("circuit open: API unavailable")
@@ -142,6 +158,23 @@ func (c *Client) Post(path string, body any) error {
 	data, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("marshal body: %w", err)
+	}
+
+	// Compress payloads above the break-even threshold. Below it, gzip's
+	// fixed overhead would actually make the wire payload larger.
+	var gzipped bool
+	if len(data) > gzipCompressionThreshold {
+		var buf bytes.Buffer
+		gw := gzip.NewWriter(&buf)
+		if _, gzErr := gw.Write(data); gzErr == nil {
+			if closeErr := gw.Close(); closeErr == nil {
+				data = buf.Bytes()
+				gzipped = true
+			}
+		}
+		// On any gzip error, fall through with the uncompressed payload —
+		// gzip should never fail for a buffer-backed writer, but defending
+		// against it costs nothing and keeps the code crash-resistant.
 	}
 
 	return WithRetry(c.retryConfig, func() (permanent bool, err error) {
@@ -158,6 +191,9 @@ func (c *Client) Post(path string, body any) error {
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+c.token)
 		req.Header.Set("X-Agent-Version", agentVersion)
+		if gzipped {
+			req.Header.Set("Content-Encoding", "gzip")
+		}
 
 		resp, err := c.http.Do(req)
 		if err != nil {
@@ -336,10 +372,17 @@ func (c *Client) SaveScreenshotMeta(s3Key string, capturedAt time.Time, fileSize
 // reports the agent's current AFK (idle) state so the live-monitoring
 // dashboard can transition users to the idle badge without waiting on
 // activity-event frequency.
+//
+// Intentionally uses the fire-and-forget path: heartbeats do NOT contribute
+// to the circuit breaker and do NOT retry. A missed heartbeat is cheap —
+// the next tick fires in 60 seconds and the server-side offline sweep will
+// catch it anyway. Coupling heartbeats to the same breaker as heavy sync
+// requests caused slow activity batches to kill presence updates.
 func (c *Client) Heartbeat(idle bool) error {
-	return c.Post("/agent/sync/heartbeat", struct {
+	c.PostBestEffort("/agent/sync/heartbeat", struct {
 		Idle bool `json:"idle"`
 	}{Idle: idle})
+	return nil
 }
 
 // OrgStreamConfig holds streaming configuration from the server.
@@ -427,11 +470,15 @@ func (c *Client) recordFailure() {
 	defer c.mu.Unlock()
 	c.failures++
 	if c.state == stateHalfOpen {
-		// probe failed — double the timeout (cap at 1 hour)
+		// Probe failed — grow the reset window so we don't thrash on a
+		// continuously-broken API, but cap aggressively so one bad minute
+		// does not lock the agent out for tens of minutes. 4× the initial
+		// reset is enough to absorb rolling Supabase hiccups without
+		// blocking presence updates for an unusable length of time.
 		c.probeInFlight = false
 		c.resetTimeout *= 2
-		if c.resetTimeout > time.Hour {
-			c.resetTimeout = time.Hour
+		if maxReset := 4 * circuitResetAfter; c.resetTimeout > maxReset {
+			c.resetTimeout = maxReset
 		}
 		c.state = stateOpen
 		c.openedAt = time.Now()

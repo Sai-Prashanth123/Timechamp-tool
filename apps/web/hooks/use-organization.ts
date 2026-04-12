@@ -54,6 +54,10 @@ export function useUsers() {
         isActive: boolean;
         emailVerified: boolean;
         createdAt: string;
+        // Number of active agent devices this user has registered. Set
+        // to 0 if they haven't installed the desktop agent yet. Used by
+        // /settings/users to render a "Agents" column badge.
+        deviceCount: number;
       }>;
     },
   });
